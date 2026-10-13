@@ -14,7 +14,7 @@ MODELS_DIR = BASE / "models"
 ASSETS_DIR = BASE / "assets"
 ICONS_DIR = ASSETS_DIR / "icons"
 
-GEMINI_MODEL = "gemini-3.5-flash-lite"
+GEMINI_MODEL = "gemini-3.8-flash"
 
 
 # =============================================================================

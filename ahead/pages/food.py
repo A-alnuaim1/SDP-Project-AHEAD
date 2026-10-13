@@ -8,6 +8,7 @@ from ahead.components import page_header
 from ahead.i18n import tr
 from ahead.platform_data import food_history,save_food
 from ahead.resources import gemini_api_key,gemini_client,gemini_error_message
+from ahead.config import GEMINI_MODEL
 from ahead.visuals import metric,macros
 
 FIELDS={'calories':'kcal','protein':'g','carbs':'g','fat':'g','sugar':'g','fiber':'g','sodium':'mg'}
@@ -25,7 +26,7 @@ def analyze_photo(data,mime):
             '"summary" (one short factual sentence), "uncertainty" (what cannot be determined). '
             'Nutrition is an uncertain estimate; do not invent exact ingredients or assume hidden oils/sauces. '
             'If this is not food, return an empty foods array and null nutrients.')
-    response=client.models.generate_content(model='gemini-2.5-flash',contents=[prompt,types.Part.from_bytes(data=data,mime_type=mime)],
+    response=client.models.generate_content(model=GEMINI_MODEL,contents=[prompt,types.Part.from_bytes(data=data,mime_type=mime)],
        config=types.GenerateContentConfig(response_mime_type='application/json'))
     raw=response.text or ''
     parsed=json.loads(raw)
