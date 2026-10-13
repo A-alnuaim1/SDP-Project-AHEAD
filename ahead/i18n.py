@@ -106,3 +106,14 @@ def arabic():
 
 def tr(value):
     return AR.get(str(value), str(value)) if arabic() else str(value)
+
+# Shared dashboard component labels.
+AR.update({
+    'Workspace':'مساحة العمل','My health':'صحتي','Care & insights':'الرعاية والتحليلات',
+    'Support & account':'المساعدة والحساب','Saved assessments':'الفحوصات المحفوظة',
+    'Personal targets':'الأهداف الشخصية','Challenge days':'أيام التحدي','Doses to check':'جرعات للمتابعة',
+    'Why this score?':'لماذا هذه الدرجة؟','Needs improvement':'يحتاج إلى تحسين','Moderate':'متوسط',
+    'Good':'جيد','Target reached':'تم تحقيق الهدف','In progress':'قيد التقدم',
+    'Flagged for review':'يحتاج إلى مراجعة','Not flagged':'لم يتم رصد مؤشر',
+    'Unread':'غير مقروء','All notifications':'جميع الإشعارات',
+})

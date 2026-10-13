@@ -191,3 +191,17 @@
     .public-card { padding: 36px 22px 28px; }
     .public-title { font-size: 2.1rem; }
 }
+
+/* AHEAD vibrant public experience */
+.st-key-login_shell {border-radius:28px!important;box-shadow:0 24px 70px #17255420!important;border:1px solid #ffffff!important;}
+.ahead-login-brand {background:linear-gradient(145deg,#2563EB,#5145B8 65%,#8B5CF6)!important;position:relative;overflow:hidden;}
+.ahead-login-brand:after {content:'✚';position:absolute;bottom:-75px;right:-30px;font-size:300px;opacity:.08;color:white;pointer-events:none;}
+.ahead-login-brand h1 {font-size:clamp(2rem,3.6vw,3rem)!important;line-height:1.13!important;}
+.ahead-feature-icon {background:#ffffff22!important;border:1px solid #ffffff30;border-radius:14px!important;}
+.ahead-feature:nth-child(2) .ahead-feature-icon {background:#06b6d44d!important;}
+.ahead-feature:nth-child(3) .ahead-feature-icon {background:#10b9814d!important;}
+.ahead-login-logo-icon {background:linear-gradient(135deg,#06B6D4,#10B981)!important;}
+.st-key-login_form button[kind="primaryFormSubmit"] {background:linear-gradient(110deg,#2563EB,#8B5CF6)!important;}
+.login-topbar a.active {color:#2563EB!important;}
+@media (max-width:700px) {.st-key-login_shell [data-testid="stHorizontalBlock"]{flex-wrap:wrap!important;} .st-key-login_shell [data-testid="stColumn"]{min-width:100%!important;} }
+@media (prefers-reduced-motion:reduce) {* {transition:none!important;animation:none!important;}}

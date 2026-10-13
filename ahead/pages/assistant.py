@@ -109,7 +109,7 @@ def render_assistant() -> None:
             f"""
 <style>
 [data-testid="stAppViewContainer"] {{
-    background: url("{static_url('chatbot_bg.png')}") center / cover no-repeat fixed !important;
+    background: radial-gradient(ellipse at 85% 10%, #EDE9FE, transparent 55%), #F3F7FF !important;
 }}
 [data-testid="stMain"] {{ background: transparent !important; }}
 [data-testid="stBottomBlockContainer"] {{ background: transparent !important; }}

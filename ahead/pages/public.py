@@ -31,8 +31,8 @@ def _public_chrome(active: str) -> None:
 {_login_css()}
 html, body, .stApp, [data-testid="stAppViewContainer"] {{
     background:
-        linear-gradient(rgba(241,248,251,0.38), rgba(241,248,251,0.38)),
-        url("{static_url('login_bg.png')}") center / cover no-repeat fixed !important;
+        radial-gradient(ellipse at 10% 10%, #DDD6FE, transparent 50%),
+        radial-gradient(ellipse at 90% 80%, #CFFAFE, transparent 45%), #F3F7FF !important;
 }}
 </style>
 """
@@ -104,8 +104,8 @@ def render_login() -> None:
 </div>"""
                 for icon, title in [
                     ("shield-check.svg", "Detect disease risk early"),
-                    ("chart-simple.svg", "Get AI-powered health insights"),
-                    ("users.svg", "Support better healthcare decisions"),
+                    ("chart-simple.svg", "Track your lifestyle and progress"),
+                    ("users.svg", "Connect your records with your doctor"),
                 ]
             )
             st.html(
@@ -115,7 +115,7 @@ def render_login() -> None:
         <div class="ahead-login-logo-icon">✚</div>
         <div class="ahead-login-logo-text">AHEAD</div>
     </div>
-    <h1>Advanced Health<br>Early Awareness and<br>Disease Detection System</h1>
+    <h1>Detect Early.<br>Prevent Better.<br>Live Healthier.</h1>
     <div class="ahead-login-description">
         AI-powered health screening designed to support earlier awareness and smarter healthcare decisions.
     </div>

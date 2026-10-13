@@ -6,6 +6,7 @@ import streamlit as st
 
 from ahead.components import page_header
 from ahead.i18n import tr
+from ahead.visuals import metric,adherence_chart
 from ahead.platform_data import dose_entries,mark_dose,notify,plans,scheduled_doses,local_today
 
 
@@ -26,6 +27,10 @@ def render_medications():
     refresh_medication_notifications(owner)
     active=plans(owner)
     today=local_today()
+    today_doses=scheduled_doses(owner,today,today)
+    cols=st.columns(3)
+    for col,args in zip(cols,[('Active plans',sum(p['status']=='active' for p in active),'Assigned by your doctor','#2563EB'),('Scheduled today',len(today_doses),'Your daily care routine','#8B5CF6'),('Logged taken',sum(d['status']=='taken' for d in today_doses),'Today’s recorded doses','#10B981')]):
+        with col:metric(*args)
     tab1,tab2,tab3=st.tabs([tr('Today'),tr('Plans'),tr('Adherence history')])
     with tab1:
         doses=scheduled_doses(owner,today,today)
@@ -55,6 +60,7 @@ def render_medications():
         past=[r for r in schedule if r['status']!='upcoming']
         taken=sum(x['status']=='taken' for x in past)
         st.metric('Last 30 days adherence',f'{taken/len(past):.0%}' if past else 'No due doses')
+        adherence_chart(past)
         if not schedule:st.info('No doses in the last 30 days.')
         else:
             st.dataframe(pd.DataFrame(past).rename(columns={'date':'Date','time':'Time','status':'Status','name':'Medication'}),hide_index=True,width='stretch')

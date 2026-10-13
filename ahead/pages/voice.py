@@ -20,7 +20,7 @@ def render_voice():
     phrases={'medication':meds,'score':score,'lifestyle':score,'assessment':'Open Disease Screenings using the button below.',
              'food':'Open Food Nutrition Analyzer using the button below.'}
     script='''<!doctype html><html><body style="font:16px sans-serif;color:#153b52">
-<button id="talk" style="background:#169fac;color:white;border:0;border-radius:10px;padding:12px 20px;cursor:pointer">🎙 Speak</button>
+<button id="talk" style="background:linear-gradient(120deg,#2563EB,#8B5CF6);color:white;border:0;border-radius:14px;padding:14px 24px;cursor:pointer;font-size:16px">🎙 Speak</button>
 <p id="out" aria-live="polite">Press Speak and say: open medication, latest lifestyle score, or open assessments.</p>
 <script>
 const Speech=window.SpeechRecognition||window.webkitSpeechRecognition;

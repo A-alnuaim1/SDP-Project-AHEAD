@@ -11,6 +11,8 @@ from ahead.platform_data import (challenge_days,food_history,get_goals,lifestyle
                                  save_lifestyle,set_challenge_day,set_goals)
 from ahead.wellness import challenge_summary,evaluate
 from ahead.platform_data import local_today
+from ahead.visuals import score_ring, category_cards, category_chart, progress_card, calendar, trend, metric, COLORS
+from ahead.theme import style_figure
 
 
 def render_wellness():
@@ -54,29 +56,33 @@ def render_wellness():
         records=lifestyle_history(owner)
         if records:
             latest=records[0]; result=latest['scores']
-            st.metric(tr('Lifestyle / Wellness Score'),f"{result['overall']}/100",
-                      None if len(records)<2 else f"{result['overall']-records[1]['scores']['overall']:+d} since previous")
-            st.caption(f"BMI calculated from height and weight: {result['bmi']}. This number alone does not describe health.")
-            cols=st.columns(5)
-            for col,(name,score) in zip(cols,result['categories'].items()):
-                col.metric(tr(name),f'{score}/100')
-                col.caption(result['explanations'][name])
+            left,right=st.columns([1,2])
+            with left:
+                score_ring(result['overall'],'Lifestyle / Wellness Score',note='Educational lifestyle assessment · not a medical diagnosis')
+            with right:
+                category_chart(result['categories'])
+                st.caption(f"BMI: {result['bmi']} · Calculated from your entered height and weight; not part of the wellness score.")
+                if len(records)>1: st.caption(f"Since previous check-in: {result['overall']-records[1]['scores']['overall']:+d} points")
+            category_cards(result)
             st.subheader(tr('Practical suggestions'))
-            for advice in result['recommendations']:st.write('• '+advice)
+            for index,advice in enumerate(result['recommendations'],1):
+                with st.expander(f'{index:02d} · Practical next step',expanded=True):st.write(advice)
     with history:
         records=lifestyle_history(owner)
         if not records:st.info(tr('Save your first check-in to see progress.'))
         else:
             df=pd.DataFrame([{'Date':r['created_at'][:10],'Score':r['scores']['overall'],
                               'Weight (kg)':r['values']['weight_kg'],'Activity minutes':r['scores']['exercise_weekly_minutes'],
-                              'Sleep (h)':r['values']['sleep_hours'],'Hydration (L)':r['values']['water_litres'],
+                              'Sleep (h)':r['values']['sleep_hours'],'Sleep quality (1–5)':r['values']['sleep_quality'],'Hydration (L)':r['values']['water_litres'],
                               'Nutrition':r['scores']['categories']['Nutrition']} for r in reversed(records)])
             interval=st.segmented_control(tr('View'),['Weekly','Monthly'],default='Weekly')
             df['Period']=pd.to_datetime(df['Date']).dt.to_period('W' if interval=='Weekly' else 'M').astype(str)
             st.dataframe(df.iloc[::-1],hide_index=True,width='stretch')
-            for field in ['Score','Weight (kg)','Activity minutes','Sleep (h)','Nutrition','Hydration (L)']:
+            chart_columns=st.columns(2)
+            for i,field in enumerate(['Score','Weight (kg)','Activity minutes','Sleep (h)','Nutrition','Hydration (L)','Sleep quality (1–5)']):
                 chart=df.groupby('Period',as_index=False)[field].mean()
-                st.plotly_chart(px.line(chart,x='Period',y=field,markers=True,title=tr(field)),width='stretch')
+                with chart_columns[i%2]:
+                    trend(chart,'Period',field,tr(field),list(COLORS.values())[i%5])
         meals=food_history(owner)
         if meals:
             st.subheader('Confirmed food entries')
@@ -99,9 +105,10 @@ def render_wellness():
         records=lifestyle_history(owner)
         if records:
             v=records[0]['values']
-            for name,amount,target,unit in [('Daily steps',v['steps'],step_goal,'steps'),('Weekly activity',v['exercise_days']*v['exercise_minutes'],exercise_goal,'min'),('Water',v['water_litres'],water_goal,'L'),('Sleep',v['sleep_hours'],sleep_goal,'h'),('Fruit/vegetables',v['fruit_veg'],fruit_goal,'servings')]:
-                st.write(f'{tr(name)}: {amount:g} / {target:g} {unit}')
-                st.progress(min(1,amount/target))
+            goal_columns=st.columns(3)
+            for i,(name,amount,target,unit) in enumerate([('Daily steps',v['steps'],step_goal,'steps'),('Weekly activity',v['exercise_days']*v['exercise_minutes'],exercise_goal,'min'),('Water',v['water_litres'],water_goal,'L'),('Sleep',v['sleep_hours'],sleep_goal,'h'),('Fruit/vegetables',v['fruit_veg'],fruit_goal,'servings')]):
+                with goal_columns[i%3]:progress_card(name,amount,target,unit,['#2563EB','#F97316','#06B6D4','#8B5CF6','#10B981'][i])
+            with goal_columns[2]:metric('Weight target',f"{weight_goal:g} kg",f"Latest: {v['weight_kg']:g} kg · difference: {v['weight_kg']-weight_goal:+g} kg",'#8B5CF6','◎')
             st.caption(f"Current weight: {v['weight_kg']:g} kg · target: {weight_goal:g} kg. Weight is a personal goal, not part of the score.")
         meals=food_history(owner)
         if meals:st.caption(f'{len(meals)} confirmed meal entries are saved in your nutrition history. Food photos do not automatically change the lifestyle score; use them to inform your next check-in.')
@@ -118,6 +125,7 @@ def render_wellness():
         if st.button(tr('Save activity'),type='primary'):
             if (chosen-start).days>=30:st.error('This challenge began more than 30 days before the selected date. Choose a day within your 30-day window.')
             else:set_challenge_day(owner,chosen.isoformat(),activity);st.rerun()
+        calendar(days,start,local_today())
         st.dataframe(pd.DataFrame([{'Day':i+1,'Date':(start+timedelta(days=i)).isoformat(),
                                    'Minutes':days.get((start+timedelta(days=i)).isoformat(),0),
                                    'Badge':'✓ 30 minutes' if days.get((start+timedelta(days=i)).isoformat(),0)>=30 else ''}

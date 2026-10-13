@@ -8,6 +8,7 @@ from ahead.components import page_header
 from ahead.i18n import tr
 from ahead.platform_data import food_history,save_food
 from ahead.resources import gemini_api_key
+from ahead.visuals import metric,macros
 
 FIELDS={'calories':'kcal','protein':'g','carbs':'g','fat':'g','sugar':'g','fiber':'g','sodium':'mg'}
 
@@ -81,6 +82,15 @@ def render_food():
             if estimates['sodium']>=600:labels.append('Contains at least 600 mg estimated sodium')
             if labels:st.info('Per estimated portion: '+', '.join(labels)+'. Check packaging or a food database for reliable numbers.')
     records=food_history(owner)
+    if records:
+        latest=records[0]['nutrients']
+        st.subheader('Latest confirmed meal')
+        st.caption(', '.join(records[0]['foods']) + ' · ' + latest.get('portion',''))
+        cols=st.columns(4)
+        colors=['#F97316','#2563EB','#F59E0B','#8B5CF6','#EC4899','#10B981','#EF4444']
+        for i,(field,unit) in enumerate(FIELDS.items()):
+            with cols[i%4]:metric(field.title(),f"{latest.get(field,0):g} {unit}",'Confirmed estimate',colors[i])
+        macros(latest)
     st.subheader(tr('Meal history'))
     if not records:st.info('No confirmed meals yet.')
     else:

@@ -14,6 +14,8 @@ from ahead.platform_data import (analytics,allowed,dose_entries,linked_patients,
 from ahead.platform_data import ai_consent
 from ahead.resources import gemini_available,chat_reply
 from ahead.storage import list_records
+from ahead.visuals import metric,adherence_chart,trend
+from ahead.theme import style_figure,show_chart
 
 DAYS=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
 
@@ -37,15 +39,22 @@ def _overview(doctor_id):
     returners={e['patient_id'] for e in events if sum(x['patient_id']==e['patient_id'] and x['type']=='login' for x in events)>=2}
     labels=['Linked patients','Disease assessments','Active (30 days)','Returning','Today','This week','This month']
     values=[len(people),len(assessments),len(active),len(returners),sum(d==today for d in dates),sum(d>=today-timedelta(days=6) for d in dates),sum(d.year==today.year and d.month==today.month for d in dates)]
-    for col,items in zip(st.columns(4),zip(labels[:4],values[:4])):col.metric(*items)
+    for col,(label,value),color in zip(st.columns(4),zip(labels[:4],values[:4]),['#2563EB','#8B5CF6','#06B6D4','#F97316']):
+        with col:metric(label,value,'Consent-linked patient records',color)
     for col,items in zip(st.columns(3),zip(labels[4:],values[4:])):col.metric(*items)
     if assessments:
         frame=pd.DataFrame([{'Disease':DISEASES.get(a['disease'],{}).get('label',a['disease']),
             'Classification':'Flagged' if a['prediction'] else 'Not flagged','Date':a['created_at'][:10]} for a in assessments])
         c1,c2=st.columns(2)
-        c1.plotly_chart(px.bar(frame.groupby('Disease',as_index=False).size(),x='Disease',y='size',title='Assessments by disease'),width='stretch')
-        c2.plotly_chart(px.bar(frame.groupby('Classification',as_index=False).size(),x='Classification',y='size',title='Model classifications'),width='stretch')
+        with c1:show_chart(style_figure(px.bar(frame.groupby('Disease',as_index=False).size(),x='Disease',y='size',color='Disease',title='Assessments by disease',color_discrete_sequence=['#2563EB','#8B5CF6','#06B6D4'])))
+        with c2:show_chart(style_figure(px.pie(frame.groupby('Classification',as_index=False).size(),names='Classification',values='size',color='Classification',hole=.65,title='Model classifications',color_discrete_map={'Flagged':'#EF4444','Not flagged':'#10B981'}),legend=True))
+        trend(frame.groupby('Date',as_index=False).size(),'Date','size','Saved assessment activity',area=True)
         st.dataframe(frame.head(15),hide_index=True,width='stretch')
+    if events:
+        event_frame=pd.DataFrame([{'Date':e['created_at'][:10],'Activity':e['type']} for e in events])
+        with st.expander('Patient activity timeline'):
+            activity=event_frame.groupby(['Date','Activity']).size().reset_index(name='Events')
+            show_chart(style_figure(px.bar(activity,x='Date',y='Events',color='Activity',title='Recorded patient activity'),legend=True))
     st.caption('Counts include only patients who explicitly linked to this doctor and screenings they chose to save. The classification is not a diagnosis.')
 
 
@@ -53,12 +62,16 @@ def _disease(doctor_id):
     _,assessments,_=analytics(doctor_id)
     disease=st.selectbox('Disease',list(DISEASES),format_func=lambda k:DISEASES[k]['label'])
     rows=[a for a in assessments if a['disease']==disease]
-    st.metric('Assessments',len(rows));st.metric('Distinct patients',len({a['owner_id'] for a in rows}))
+    a,b=st.columns(2)
+    with a:metric('Assessments',len(rows),'Saved for the selected condition','#2563EB')
+    with b:metric('Distinct patients',len({a['owner_id'] for a in rows}),'Patients linked to you','#8B5CF6')
     if not rows:st.info('No saved assessments for this disease.');return
     data=pd.DataFrame([{'Date':a['created_at'][:10],'Patient ID':a['owner_id'],
         'Score (%)':round(a['score']*100,1),'Classification':'Flagged' if a['prediction'] else 'Not flagged',
         'Model':a['model']} for a in rows])
-    st.plotly_chart(px.line(data.groupby('Date',as_index=False).size(),x='Date',y='size',markers=True,title='Assessments over time'),width='stretch')
+    trend(data.groupby('Date',as_index=False).size(),'Date','size','Assessments over time')
+    model_counts=data.groupby('Model',as_index=False).size()
+    show_chart(style_figure(px.bar(model_counts,x='size',y='Model',orientation='h',color='Model',title='Models used')))
     st.dataframe(data,hide_index=True,width='stretch')
     st.caption('The models output flagged/not flagged at their threshold, not Low/Medium/High categories.')
 
@@ -73,6 +86,8 @@ def _records(doctor_id):
     st.dataframe(pd.DataFrame([{'ID':r['id'],'Date':r['created_at'][:19],'Disease':r['disease'],'Score (%)':round(r['score']*100,1),
         'Result':'Flagged' if r['prediction'] else 'Not flagged','Model':r['model']} for r in rows]),hide_index=True,width='stretch')
     if len(rows)>1:
+        comparable=pd.DataFrame([{'Date':r['created_at'],'Score (%)':r['score']*100,'Series':r['disease']+' · '+r['model']} for r in reversed(rows)])
+        show_chart(style_figure(px.line(comparable,x='Date',y='Score (%)',color='Series',markers=True,title='Assessment history · separate condition / model series'),legend=True))
         a,b=rows[:2];st.metric('Latest vs previous model score',f"{a['score']*100:.1f}%",f"{(a['score']-b['score'])*100:+.1f} percentage points")
         if a['disease']!=b['disease'] or a['model']!=b['model']:st.info('These two results use different conditions or models. Their scores should not be treated as a clinical trend.')
     selected=st.selectbox('Open historical assessment',rows,format_func=lambda r:f"{r['created_at'][:19]} · {r['disease']} · ID {r['id']}")
@@ -116,7 +131,9 @@ def _medication(doctor_id):
     doses=scheduled_doses(patient_id,local_today()-timedelta(days=29),local_today(),doctor_id)
     past=[d for d in doses if d['status']!='upcoming']
     st.metric('Adherence over last 30 days',f"{sum(d['status']=='taken' for d in past)/len(past):.0%}" if past else 'No due doses')
-    if past:st.dataframe(pd.DataFrame(past),hide_index=True,width='stretch')
+    if past:
+        adherence_chart(past)
+        st.dataframe(pd.DataFrame(past),hide_index=True,width='stretch')
     st.caption('Unlogged past doses are shown as missed, which may reflect missing entries rather than confirmed nonadherence.')
 
 

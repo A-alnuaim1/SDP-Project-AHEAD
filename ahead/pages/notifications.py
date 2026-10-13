@@ -3,6 +3,7 @@ import streamlit as st
 from datetime import timedelta
 from ahead.components import go_to,page_header
 from ahead.i18n import tr
+from ahead.visuals import metric
 from ahead.platform_data import mark_notification,notifications,lifestyle_history,get_goals,challenge_days,notify,local_today
 from ahead.pages.medications import refresh_medication_notifications
 
@@ -12,6 +13,11 @@ def render_notifications():
     page_header('Patient updates','Notifications','Reminders and changes for your account.')
     refresh_patient_notifications(owner)
     rows=notifications(owner)
+    a,b=st.columns(2)
+    with a:metric('Unread',sum(not r['read_at'] for r in rows),'Updates waiting for your attention','#8B5CF6','◉')
+    with b:metric('All notifications',len(rows),'Your personal update center','#2563EB','◷')
+    unread_only=st.toggle('Show unread only',value=False)
+    if unread_only:rows=[r for r in rows if not r['read_at']]
     if not rows:st.info('No notifications yet. Reminders appear here while you use the app.')
     for row in rows:
         with st.container(border=True):

@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from ahead.clinical_data import prepare_upload, validate_row
+from ahead.visuals import metric
 from ahead.components import current_user, model_selector, page_header, result_card
 from ahead.config import DISEASES, pretty_label
 from ahead.reports import patient_report
@@ -157,6 +158,10 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
     st.info(f"{model_name} validation-set recall {reference.get('recall_disease', 0):.1%}, "
             f"precision {reference.get('precision_disease', 0):.1%} at a 50% threshold. "
             "These figures may differ at a tuned threshold and on a hospital cohort.")
+    a,b,c=st.columns(3)
+    with a:metric('Records in review',len(records),'Current condition and cohort','#2563EB')
+    with b:metric('Need input review',sum(bool(json.loads(r['issues_json'])) for r in records),'Missing or invalid entered data','#F59E0B')
+    with c:metric('Scored records',sum(r['score'] is not None for r in records),'Available for clinical review','#8B5CF6')
     safe_export = table.copy()
     for column in ("Patient", "Issues", "Model"):
         safe_export[column] = safe_export[column].map(

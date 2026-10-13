@@ -9,7 +9,7 @@ from html import escape
 
 import streamlit as st
 
-from ahead.components import current_user, logout, pref
+from ahead.components import current_user, logout, pref, page_header
 from ahead.theme import APPEARANCE_OPTIONS, appearance_mode
 from ahead.storage import change_password, delete_records, delete_screenings, update_profile, update_preferences
 from ahead.i18n import tr
@@ -226,14 +226,7 @@ def _account_tab(user: dict) -> None:
 
 def render_settings() -> None:
     user = current_user()
-    st.html(
-        """
-<div class="settings-shell-title">
-    <h1>Settings</h1>
-    <p>Manage your profile, display preferences, notifications and account.</p>
-</div>
-"""
-    )
+    page_header('Your account','Settings','Personalize your experience, privacy and care team access.')
     with st.container(key="settings_tabs"):
         profile, appearance, preferences, account = st.tabs(["Profile", "Appearance", "Preferences", "Account"])
     with profile:

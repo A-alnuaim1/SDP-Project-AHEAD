@@ -39,7 +39,7 @@ def _risk_distribution_figure(history: list) -> go.Figure:
         showarrow=False, font=dict(size=22, color=t["title"]),
     )
     style_figure(figure, height=300, legend=True)
-    figure.update_layout(title="Screening classifications — this session")
+    figure.update_layout(title="Saved screening classifications")
     return figure
 
 
@@ -93,6 +93,7 @@ def render_overview() -> None:
     user = current_user()
     history = st.session_state.get("screening_history", [])
 
+    dashboard_copy = ("Review linked patient records, medication routines and assessment activity." if user["is_doctor"] else "Build healthier habits, keep track of your care, and make time for prevention.")
     # ------------------------------------------------------------------ hero
     with st.container(key="home_hero"):
         st.html(
@@ -101,8 +102,7 @@ def render_overview() -> None:
     <div>
         <div class="home-eyebrow">AHEAD Health Dashboard</div>
         <h1>Welcome back, {escape(user['first_name'])}</h1>
-        <p>Early detection today. Healthier tomorrows. Start a screening, review your session results
-        or explore AHEAD's reference datasets and model insights.</p>
+        <p>{escape(dashboard_copy)}</p>
     </div>
     <div class="hero-badge"><small>Our mission</small>Small screenings.<br>Big futures.</div>
 </div>
@@ -118,14 +118,22 @@ def render_overview() -> None:
             if st.button("Ask AHEAD Assistant", key="hero_ask", width="stretch"):
                 open_assistant("overview")
 
+    if not user["is_doctor"]:
+        from ahead.pages.patient_dashboard import render_patient_dashboard
+        render_patient_dashboard()
+        return
+
+    if st.button("Open Advanced Analytics & Patient Intelligence", type="primary"):
+        go_to("intelligence")
+
     # ------------------------------------------------------------------ KPIs
     total_records = sum(n_samples(d) for d in DISEASES)
     families = max((len(validation_results(d)) for d in DISEASES), default=0)
     elevated = sum(1 for item in history if item["prediction"] == 1)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        kpi_card("Screenings this session", str(len(history)),
-                 "Kept only in this browser session" if history else "Run your first screening", "✚")
+        kpi_card("Saved screenings", str(len(history)),
+                 "Available in your screening history" if history else "Run your first screening", "✚")
     with c2:
         kpi_card("Elevated results", str(elevated),
                  "Flagged for professional review" if elevated else "No elevated patterns yet", "!",
@@ -140,7 +148,7 @@ def render_overview() -> None:
     condition_cards("overview")
 
     # ------------------------------------------------------------------ session visuals
-    section_heading("Your session at a glance", "Results from screenings you have completed since signing in.")
+    section_heading("Your screening history", "Saved results loaded for your account and screenings completed during this visit.")
     left, right = st.columns(2)
     if history:
         with left:

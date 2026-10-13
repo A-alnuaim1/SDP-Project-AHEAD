@@ -8,6 +8,7 @@ Every custom element uses ``var(--ahead-*)`` so switching the appearance mode
 only swaps the token block emitted by :func:`apply_theme`.
 """
 
+from pathlib import Path
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -20,21 +21,21 @@ from ahead.resources import icon_uri
 # =============================================================================
 
 LIGHT = {
-    "bg": "#F4F7FB",
+    "bg": "#F3F7FF",
     "card": "#FFFFFF",
     "soft": "#F3F7FA",
     "border": "#E1E8EF",
-    "title": "#102A43",
+    "title": "#172554",
     "text": "#344054",
     "muted": "#6B7A90",
-    "accent": "#0E9AA7",
-    "accent_strong": "#0B7F8B",
-    "accent_soft": "#E6F6F7",
-    "danger": "#C75D5D",
+    "accent": "#2563EB",
+    "accent_strong": "#1D4ED8",
+    "accent_soft": "#EAF0FF",
+    "danger": "#EF4444",
     "danger_soft": "#FCEDED",
-    "success": "#2E9477",
+    "success": "#10B981",
     "success_soft": "#E8F5EF",
-    "warning": "#C98F1E",
+    "warning": "#F59E0B",
     "warning_soft": "#FFF6E0",
     "shadow": "0 8px 26px rgba(16,42,67,0.06)",
     "grid": "#E9EEF3",
@@ -102,6 +103,7 @@ def style_figure(figure: go.Figure, height: int = 320, legend: bool = False) -> 
         title_font=dict(size=15, color=t["title"]),
         margin=dict(l=20, r=20, t=50, b=80 if legend else 20),
         showlegend=legend,
+        colorway=["#2563EB", "#8B5CF6", "#06B6D4", "#10B981", "#F97316"],
         legend=dict(orientation="h", yanchor="top", y=-0.28, xanchor="left", x=0, title=""),
     )
     figure.update_xaxes(gridcolor=t["grid"], zerolinecolor=t["grid"], title_font=dict(color=t["muted"]))
@@ -557,6 +559,7 @@ def _token_block(t: dict) -> str:
 
 def inject_global_css() -> None:
     st.html(GLOBAL_CSS)
+    st.html("<style>" + (Path(__file__).with_name("redesign.css")).read_text() + "</style>")
 
 
 def apply_theme(force_light: bool = False) -> None:
@@ -580,7 +583,7 @@ def sidebar_dynamic_css(active_key: str) -> str:
     )
     rules.append(
         f".st-key-nav_{active_key} .stButton > button, .st-key-nav_{active_key} .stButton > button:hover {{"
-        " background: linear-gradient(135deg, #0797A5, #0D8795) !important; color: #FFFFFF !important;"
+        " background: linear-gradient(135deg, #2563EB, #6452D6) !important; color: #FFFFFF !important;"
         " font-weight: 650 !important; box-shadow: 0 4px 12px rgba(3,91,108,0.22) !important; }"
     )
     rules.append(
