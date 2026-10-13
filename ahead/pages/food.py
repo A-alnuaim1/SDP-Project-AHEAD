@@ -7,7 +7,7 @@ import streamlit as st
 from ahead.components import page_header
 from ahead.i18n import tr
 from ahead.platform_data import food_history,save_food
-from ahead.resources import gemini_api_key
+from ahead.resources import gemini_api_key,gemini_client,gemini_error_message
 from ahead.visuals import metric,macros
 
 FIELDS={'calories':'kcal','protein':'g','carbs':'g','fat':'g','sugar':'g','fiber':'g','sodium':'mg'}
@@ -18,7 +18,7 @@ def analyze_photo(data,mime):
     from google.genai import types
     key=gemini_api_key()
     if not key:raise RuntimeError('Image analysis is not configured. Enter the food and nutrition values manually.')
-    client=genai.Client(api_key=key)
+    client=gemini_client()
     prompt=('Identify visible foods and approximate portions in this photo. Return ONLY JSON with keys '
             '"foods" (array of visible food names), "portion" (short estimate), "calories", "protein", '
             '"carbs", "fat", "sugar", "fiber", "sodium" (numbers, use null if unknown), '
@@ -48,8 +48,8 @@ def render_food():
                     result=analyze_photo(uploaded.getvalue(),uploaded.type)
                     st.session_state.meal_analysis=result
                     st.session_state.meal_photo_signature=(uploaded.name,uploaded.size)
-                except (RuntimeError,ValueError,Exception) as exc:
-                    st.error(f'Image analysis did not complete: {str(exc)[:180]}')
+                except Exception as exc:
+                    st.error(gemini_error_message(exc))
     result=st.session_state.get('meal_analysis',{})
     if uploaded and st.session_state.get('meal_photo_signature')!=(uploaded.name,uploaded.size):result={}
     if result:

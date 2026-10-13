@@ -13,7 +13,7 @@ import streamlit as st
 
 from ahead.components import go_to
 from ahead.config import ICONS_DIR
-from ahead.resources import chat_reply, gemini_available, icon_uri, static_url
+from ahead.resources import chat_reply, gemini_available, gemini_error_message, icon_uri, static_url
 from ahead.theme import is_dark, tokens
 
 WELCOME = "Hi! I'm AHEAD Assistant. What would you like to know about AHEAD or its screening conditions?"
@@ -177,8 +177,8 @@ def render_assistant() -> None:
                 if gemini_available():
                     try:
                         answer = _reply(st.session_state.chat_messages)
-                    except Exception:
-                        answer = None
+                    except Exception as exc:
+                        answer = gemini_error_message(exc)
                 if not answer:
                     answer = _local_answer(prompt) or (
                         "AHEAD Assistant is not available right now (no Gemini API key or the service could not be "

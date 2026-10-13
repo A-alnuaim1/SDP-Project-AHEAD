@@ -210,11 +210,38 @@ def gemini_available() -> bool:
     return bool(gemini_api_key())
 
 
+def gemini_client():
+    """Bound each network attempt; do not silently retry while a user waits."""
+    from google import genai
+    from google.genai import types
+    return genai.Client(api_key=gemini_api_key(), http_options=types.HttpOptions(
+        timeout=30000, retry_options=types.HttpRetryOptions(attempts=1)))
+
+
+def gemini_error_message(error: Exception) -> str:
+    """Expose an actionable category, never raw responses, prompts or credentials."""
+    import httpx
+    code = str(getattr(error, 'code', ''))
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)) or code == '504':
+        return 'Gemini timed out. Please try again later.'
+    if code == '429':
+        return 'Gemini quota or rate limit reached. Check the project usage and model limits in Google AI Studio.'
+    if code in ('401', '403'):
+        return 'Gemini access was denied. The app owner should check the server API key and project permissions.'
+    if code == '404':
+        return 'The configured Gemini model was not found or is unavailable to this project. The app owner needs to check the model setting.'
+    if code == '400':
+        return 'Gemini rejected the request. The app owner should check the API key, model and request configuration.'
+    if code in ('500', '502', '503'):
+        return 'Gemini is temporarily unavailable. Please try again later.'
+    return 'Could not complete the Gemini request. Check the API project configuration and connection, then try again.'
+
+
 def generate_text(prompt: str) -> str:
     """Single-turn generation. Raises if the client is not configured."""
     from google import genai
 
-    client = genai.Client(api_key=gemini_api_key())
+    client = gemini_client()
     response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
     return response.text or ""
 
@@ -227,7 +254,7 @@ def chat_reply(system_instruction: str, turns: list) -> str:
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=gemini_api_key())
+    client = gemini_client()
     contents = [types.Content(role=t["role"], parts=[types.Part.from_text(text=t["text"])]) for t in turns]
     response = client.models.generate_content(
         model=GEMINI_MODEL,
