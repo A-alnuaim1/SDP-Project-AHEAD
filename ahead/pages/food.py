@@ -1,4 +1,5 @@
 """Food photo preview and optional real Gemini image analysis with manual confirmation."""
+import base64
 import json
 
 import pandas as pd
@@ -7,28 +8,25 @@ import streamlit as st
 from ahead.components import page_header
 from ahead.i18n import tr
 from ahead.platform_data import food_history,save_food
-from ahead.resources import gemini_api_key,gemini_client,gemini_error_message
-from ahead.config import GEMINI_MODEL
+from ahead.resources import gemini_api_key,gemini_interaction,gemini_error_message
 from ahead.visuals import metric,macros
 
 FIELDS={'calories':'kcal','protein':'g','carbs':'g','fat':'g','sugar':'g','fiber':'g','sodium':'mg'}
 
 
 def analyze_photo(data,mime):
-    from google import genai
-    from google.genai import types
     key=gemini_api_key()
     if not key:raise RuntimeError('Image analysis is not configured. Enter the food and nutrition values manually.')
-    client=gemini_client()
     prompt=('Identify visible foods and approximate portions in this photo. Return ONLY JSON with keys '
             '"foods" (array of visible food names), "portion" (short estimate), "calories", "protein", '
             '"carbs", "fat", "sugar", "fiber", "sodium" (numbers, use null if unknown), '
             '"summary" (one short factual sentence), "uncertainty" (what cannot be determined). '
             'Nutrition is an uncertain estimate; do not invent exact ingredients or assume hidden oils/sauces. '
             'If this is not food, return an empty foods array and null nutrients.')
-    response=client.models.generate_content(model=GEMINI_MODEL,contents=[prompt,types.Part.from_bytes(data=data,mime_type=mime)],
-       config=types.GenerateContentConfig(response_mime_type='application/json'))
-    raw=response.text or ''
+    raw=gemini_interaction([
+        {"type":"text","text":prompt},
+        {"type":"image","data":base64.b64encode(data).decode("ascii"),"mime_type":mime},
+    ], response_format={"type":"text","mime_type":"application/json"})
     parsed=json.loads(raw)
     if not isinstance(parsed,dict) or not isinstance(parsed.get('foods'),list):raise ValueError('No usable foods detected. Enter them manually.')
     return parsed
