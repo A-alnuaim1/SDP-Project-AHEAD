@@ -8,6 +8,7 @@ network is reached through here.
 
 import base64
 import json
+import logging
 import os
 import pickle
 
@@ -222,6 +223,9 @@ def gemini_error_message(error: Exception) -> str:
     """Expose an actionable category, never raw responses, prompts or credentials."""
     import httpx
     code = str(getattr(error, 'code', ''))
+    # Allowlist diagnostics: never log the exception body, prompt, key or patient data.
+    safe_code = code if code in {'400', '401', '403', '404', '429', '500', '502', '503', '504'} else 'unknown'
+    logging.getLogger(__name__).warning('AHEAD Gemini request failed: HTTP %s', safe_code)
     if isinstance(error, (TimeoutError, httpx.TimeoutException)) or code == '504':
         return 'Gemini timed out. Please try again later.'
     if code == '429':
@@ -233,7 +237,7 @@ def gemini_error_message(error: Exception) -> str:
     if code == '400':
         return 'Gemini rejected the request. The app owner should check the API key, model and request configuration.'
     if code in ('500', '502', '503'):
-        return 'Gemini is temporarily unavailable. Please try again later.'
+        return f'Gemini is temporarily unavailable (HTTP {safe_code}). Please try again later.'
     return 'Could not complete the Gemini request. Check the API project configuration and connection, then try again.'
 
 
