@@ -71,6 +71,22 @@
 [class*="_summary_card"] [data-testid="stElementContainer"]:has(> .stButton) {position:absolute;inset:0;z-index:2;margin:0!important;}
 [class*="_summary_card"] .stButton,[class*="_summary_card"] .stButton button {width:100%!important;height:100%!important;}
 [class*="_summary_card"] .stButton button {opacity:0;cursor:pointer;}
+/* home "This week" strip */
+.st-key-home_week {background:var(--ahead-card);border:1px solid var(--ahead-border);border-radius:20px;padding:18px 20px!important;box-shadow:0 6px 24px #102a5308;gap:14px!important;margin-top:16px;}
+.week-head {display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.week-title {font-size:1rem;font-weight:720;color:var(--ahead-title);}
+.week-sub {margin-top:2px;font-size:.76rem;color:var(--ahead-muted);}
+.week-streak {display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;white-space:nowrap;font-size:.74rem;font-weight:700;background:color-mix(in srgb,#C98F1E 14%,var(--ahead-card));color:color-mix(in srgb,#C98F1E 65%,var(--ahead-title));}
+.week-streak::before {content:"";width:14px;height:14px;background:currentColor;-webkit-mask:var(--flame) center/contain no-repeat;mask:var(--flame) center/contain no-repeat;}
+.week-days {display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-top:16px;}
+.week-day {display:flex;flex-direction:column;align-items:center;gap:6px;font-size:.72rem;color:var(--ahead-muted);}
+.week-day b {width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;border:1.5px solid var(--ahead-border);color:var(--ahead-muted);background:var(--ahead-card);}
+.week-day.done b {background:#2E9477;border-color:#2E9477;color:#FFFFFF;font-size:1rem;}
+.week-day.missed b {border-color:color-mix(in srgb,#C98F1E 45%,var(--ahead-border));color:color-mix(in srgb,#C98F1E 70%,var(--ahead-title));}
+.week-day.future b {border-style:dashed;opacity:.6;}
+.week-day.is-today span {color:var(--ahead-accent);font-weight:700;}
+.week-day.open b {border:2px solid var(--ahead-accent);color:var(--ahead-accent);}
+.week-day.done.is-today b {box-shadow:0 0 0 3px color-mix(in srgb,#2E9477 25%,transparent);}
 [data-testid="stPlotlyChart"] {border:1px solid var(--ahead-border);border-radius:20px;padding:8px;background:var(--ahead-card);box-shadow:0 4px 18px #102a5305;overflow:hidden;}
 [data-testid="stForm"] {background:var(--ahead-card);border:1px solid var(--ahead-border)!important;border-radius:22px!important;padding:24px!important;}
 [data-testid="stVerticalBlockBorderWrapper"] > div {border-radius:18px;}

@@ -1,5 +1,5 @@
 """Shared, data-driven presentation components. No inference or storage mutations."""
-from datetime import timedelta
+from datetime import date, timedelta
 from html import escape
 import math
 import pandas as pd
@@ -81,6 +81,31 @@ def calendar(days,start,today):
         cells.append(f'<div class="calendar-day {state}" title="{day.isoformat()}: {minutes} minutes · {label}"><small>{day:%d %b}</small><strong>{"✓" if state=="complete" else i+1}</strong><span>{minutes} min</span><small>{label}</small></div>')
     st.html('<div class="challenge-calendar" aria-label="30 day activity calendar">'+''.join(cells)+'</div>')
     st.caption('✓ Complete: at least 30 minutes · Outlined: today · Pale: upcoming · Amber: past day below target')
+
+def week_strip(days, today):
+    """Monday-to-Sunday view of the current week: a tick for 30+ active minutes, plus the current streak."""
+    start = today - timedelta(days=today.weekday())
+    first = min((date.fromisoformat(d) for d in days), default=today)   # days before the first log aren't "missed"
+    day = today if days.get(today.isoformat(), 0) >= 30 else today - timedelta(days=1)
+    streak = 0
+    while days.get(day.isoformat(), 0) >= 30:
+        streak += 1
+        day -= timedelta(days=1)
+    cells = []
+    for i in range(7):
+        day = start + timedelta(days=i)
+        minutes = days.get(day.isoformat(), 0)
+        state = ('done' if minutes >= 30 else 'future' if day > today else 'open' if day == today
+                 else 'missed' if day >= first else 'before')
+        mark = '✓' if state == 'done' else str(minutes) if minutes else '·' if state != 'missed' else '–'
+        today_class = ' is-today' if day == today else ''
+        cells.append(f'<div class="week-day {state}{today_class}" title="{day:%A} {day.day} {day:%B}: {minutes} active minutes">'
+                     f'<span>{"Today" if day == today else f"{day:%a}"}</span><b>{mark}</b></div>')
+    streak_text = f'{streak}-day streak' if streak else 'No streak yet'
+    st.html(f'''<div class="week-head"><div><div class="week-title">This week</div>
+<div class="week-sub">Days with 30+ active minutes</div></div>
+<span class="week-streak" style="--flame:url('{icon_uri('dashboard/challenge.svg')}')">{streak_text}</span></div>
+<div class="week-days" aria-label="Active days this week">{''.join(cells)}</div>''')
 
 def macros(nutrients):
     values=[float(nutrients.get(key) or 0) for key in ('protein','carbs','fat')]

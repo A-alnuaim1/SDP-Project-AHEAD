@@ -6,7 +6,7 @@ from ahead.components import condition_cards, empty_state, go_to, section_headin
 from ahead.platform_data import lifestyle_history,get_goals,challenge_days,scheduled_doses,local_today
 from ahead.storage import load_screenings
 from ahead.wellness import challenge_summary
-from ahead.visuals import summary_card,score_ring,progress_card,category_chart,trend,calendar,COLORS
+from ahead.visuals import summary_card,week_strip,score_ring,progress_card,category_chart,trend,COLORS
 
 
 def render_patient_dashboard():
@@ -49,11 +49,12 @@ def render_patient_dashboard():
             ('Fruit / vegetables',v['fruit_veg'],goals.get('fruit_veg',5),'servings','#2E9477')]):
             with col:progress_card(*args)
         st.caption('Progress reflects the latest self-reported check-in. Default targets are shown until you save your own goals.')
-    with st.expander('Your 30×30 activity calendar',expanded=bool(days)):
-        if days:calendar(days,challenge['start'],today)
-        else:
-            st.write('Record your first activity day in the tracker to begin your 30-day view.')
-        if st.button('Open activity challenge'):go_to('wellness')
+    with st.container(key='home_week'):
+        week_strip(days,today)
+        with st.container(horizontal=True,vertical_alignment='center',horizontal_alignment='distribute'):
+            st.caption(f"{challenge['completed']} of 30 days in your 30×30 challenge" if days
+                       else 'Start the 30×30 challenge: 30 active minutes a day for 30 days.')
+            if st.button('Log activity →',type='primary',key='home_log_activity'):go_to('wellness')
     section_heading('Make time for prevention','Choose a condition to start your guided screening.')
     condition_cards('patient_dashboard')
     if assessments:
