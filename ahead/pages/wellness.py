@@ -124,9 +124,5 @@ def render_wellness():
             if (chosen-start).days>=30:st.error('This challenge began more than 30 days before the selected date. Choose a day within your 30-day window.')
             else:set_challenge_day(owner,chosen.isoformat(),activity);st.rerun()
         calendar(days,start,local_today())
-        st.dataframe(pd.DataFrame([{'Day':i+1,'Date':(start+timedelta(days=i)).isoformat(),
-                                   'Minutes':days.get((start+timedelta(days=i)).isoformat(),0),
-                                   'Badge':'✓ 30 minutes' if days.get((start+timedelta(days=i)).isoformat(),0)>=30 else ''}
-                                  for i in range(30)]),hide_index=True,width='stretch')
         if status['completed']>=7:st.success('Achievement: 7 active days!')
         if status['completed']==30:st.balloons()
