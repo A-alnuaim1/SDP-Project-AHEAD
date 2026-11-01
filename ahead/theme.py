@@ -444,6 +444,8 @@ h1, h2, h3, h4, h5, h6 { color: var(--ahead-title); }
     color: var(--ahead-accent) !important; font-size: 1.25rem !important; background: var(--ahead-accent-soft); border-radius: 9px; padding: 5px;
 }
 .assistant-time { color: var(--ahead-muted); font-size: 0.68rem; margin: -6px 0 4px 4px; }
+.assistant-voice-badge { display: inline-block; margin-right: 8px; padding: 1px 8px; border-radius: 100px; background: var(--ahead-accent-soft); color: var(--ahead-accent); font-weight: 650; }
+.st-key-assistant_voice_controls { margin-top: 2px; }
 [data-testid="stChatMessage"] { background: var(--ahead-card); border: 1px solid var(--ahead-border); border-radius: 16px; padding: 12px 16px; box-shadow: var(--ahead-shadow); }
 [data-testid="stChatMessage"] p { color: var(--ahead-text); }
 [data-testid="stChatMessageAvatarCustom"], [data-testid="stChatMessageAvatarAssistant"] { background: var(--ahead-accent-soft); }

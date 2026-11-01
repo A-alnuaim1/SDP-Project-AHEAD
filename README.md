@@ -61,8 +61,11 @@ Analytics & Patient Intelligence** area reports only linked patients, their date
 medication adherence, and record-based summaries. Doctors create/edit/pause/resume/stop medication plans;
 patients can only log their own scheduled doses. The original **Clinical Dashboard** handles imported
 de-identified files separately. Imported rows are not automatically merged with registered patient accounts.
-The default record-based summary and data-quality checklist do not use generative AI. The patient voice UI
-and photo flow have explicit fallback paths and make no diagnostic or prescribing decisions.
+The default record-based summary and data-quality checklist do not use generative AI. Voice questions are
+asked through the microphone in the **AI Assistant** chat bar: Gemini transcribes the recording (it is not
+stored), page requests such as "open medication" and the patient's own status questions are answered inside
+the app, and answers can be read aloud by the browser. The voice and photo flows have explicit fallback paths
+and make no diagnostic or prescribing decisions.
 
 Database migration is automatic and additive on app startup: the existing `screenings` table gains input
 history columns and `ahead/platform_data.py` creates linked-care, wellness, food, medication, dose, notification,

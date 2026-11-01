@@ -22,7 +22,7 @@ def pages(user,names):
             print('FAIL',page,[x.message for x in at.exception]);raise RuntimeError(page)
         print('PASS',user['role'],page,flush=True)
     return at
-pages(p,['overview','wellness','food','medications','notifications','voice','settings','screenings','analytics','assistant'])
+pages(p,['overview','wellness','food','medications','notifications','settings','screenings','analytics','assistant'])
 pages(d,['overview','intelligence','clinical'])
 for i in range(2):save_lifestyle(p['id'],v,evaluate(v))
 set_goals(p['id'],{'steps':8000,'weight':72,'exercise':150,'water':2,'sleep':8,'fruit_veg':5})

@@ -44,7 +44,6 @@ from ahead.pages.medications import render_medications  # noqa: E402
 from ahead.pages.notifications import render_notifications  # noqa: E402
 from ahead.pages.notifications import refresh_patient_notifications  # noqa: E402
 from ahead.pages.doctor_intelligence import render_doctor_intelligence  # noqa: E402
-from ahead.pages.voice import render_voice  # noqa: E402
 
 init_db()
 init_platform()
@@ -80,7 +79,7 @@ if st.session_state.get('pref_language')=='العربية':
 # SIDEBAR
 # =============================================================================
 
-patient_only = {'wellness','food','medications','notifications','voice'}
+patient_only = {'wellness','food','medications','notifications'}
 visible_nav = [item for item in NAV_ITEMS if (not item[3] or user["is_doctor"])
                and (not user["is_doctor"] or item[0] not in patient_only)]
 nav_keys = {item[0] for item in visible_nav}
@@ -111,7 +110,7 @@ with st.sidebar:
         for key, label, _icon, _doctor_only in visible_nav:
             group = ('Care & insights' if key in ('clinical','intelligence','analytics') else
                      'My health' if key in ('wellness','food','medications') else
-                     'Support & account' if key in ('notifications','voice','assistant','settings') else 'Workspace')
+                     'Support & account' if key in ('notifications','assistant','settings') else 'Workspace')
             if group != previous_group:
                 st.html(f'<div class="sidebar-section-label">{tr(group)}</div>')
                 previous_group = group
@@ -158,7 +157,6 @@ PAGES = {
     "food":render_food,
     "medications":render_medications,
     "notifications":render_notifications,
-    "voice":render_voice,
     "analytics": render_analytics,
     "clinical": render_clinical_dashboard,
     "intelligence":render_doctor_intelligence,

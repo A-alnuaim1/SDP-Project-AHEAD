@@ -47,6 +47,7 @@ DEFAULT_PREFS = {
     "notify_system": True,
     "notify_education": False,
     "keep_history": True,
+    "speak_replies": True,
 }
 
 
