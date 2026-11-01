@@ -86,7 +86,7 @@ def render_food():
         st.subheader('Latest confirmed meal')
         st.caption(', '.join(records[0]['foods']) + ' · ' + latest.get('portion',''))
         cols=st.columns(4)
-        colors=['#F97316','#2563EB','#F59E0B','#8B5CF6','#EC4899','#10B981','#EF4444']
+        colors=['#C98F1E','#0E9AA7','#E0B65A','#14556B','#D2565C','#2E9477','#5B8FA3']
         for i,(field,unit) in enumerate(FIELDS.items()):
             with cols[i%4]:metric(field.title(),f"{latest.get(field,0):g} {unit}",'Confirmed estimate',colors[i])
         macros(latest)

@@ -46,8 +46,8 @@ def _overview(doctor_id):
         frame=pd.DataFrame([{'Disease':DISEASES.get(a['disease'],{}).get('label',a['disease']),
             'Classification':'Flagged' if a['prediction'] else 'Not flagged','Date':a['created_at'][:10]} for a in assessments])
         c1,c2=st.columns(2)
-        with c1:show_chart(style_figure(px.bar(frame.groupby('Disease',as_index=False).size(),x='Disease',y='size',color='Disease',title='Assessments by disease',color_discrete_sequence=['#2563EB','#8B5CF6','#06B6D4'])))
-        with c2:show_chart(style_figure(px.pie(frame.groupby('Classification',as_index=False).size(),names='Classification',values='size',color='Classification',hole=.65,title='Model classifications',color_discrete_map={'Flagged':'#EF4444','Not flagged':'#10B981'}),legend=True))
+        with c1:show_chart(style_figure(px.bar(frame.groupby('Disease',as_index=False).size(),x='Disease',y='size',color='Disease',title='Assessments by disease',color_discrete_sequence=['#0E9AA7','#14556B','#5B8FA3'])))
+        with c2:show_chart(style_figure(px.pie(frame.groupby('Classification',as_index=False).size(),names='Classification',values='size',color='Classification',hole=.65,title='Model classifications',color_discrete_map={'Flagged':'#C75D5D','Not flagged':'#2E9477'}),legend=True))
         trend(frame.groupby('Date',as_index=False).size(),'Date','size','Saved assessment activity',area=True)
         st.dataframe(frame.head(15),hide_index=True,width='stretch')
     if events:

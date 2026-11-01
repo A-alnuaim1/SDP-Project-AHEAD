@@ -465,7 +465,7 @@ def render_predictor(disease: str) -> bool:
         from ahead.visuals import score_ring
         score_ring(probability * 100, "Model screening score",
                    status="Flagged for review" if prediction else "Not flagged",
-                   color="#EF4444" if prediction else "#10B981",
+                   color="#C75D5D" if prediction else "#2E9477",
                    note=f"Classification threshold: {threshold * 100:g}%. This score is not a calibrated clinical probability.")
     report_metrics = final_metrics(disease) if model_name == best_model(disease) else next(
         (m for m in validation_results(disease) if m["model"] == model_name), {})
@@ -568,7 +568,7 @@ def render_predictor(disease: str) -> bool:
             if local:
                 sensitivity_frame = pd.DataFrame([{'Input':pretty_label(f),'Score difference (points)':delta*100} for f,_,_,delta in local])
                 sensitivity_figure = px.bar(sensitivity_frame,x='Score difference (points)',y='Input',orientation='h',title='Illustrative input sensitivity')
-                sensitivity_figure.update_traces(marker_color=['#8B5CF6' if v>=0 else '#06B6D4' for v in sensitivity_frame['Score difference (points)']])
+                sensitivity_figure.update_traces(marker_color=['#14556B' if v>=0 else '#5B8FA3' for v in sensitivity_frame['Score difference (points)']])
                 show_chart(style_figure(sensitivity_figure,300))
                 st.dataframe(pd.DataFrame([{"Input": pretty_label(f), "Your value": str(v),
                                             "Comparison value": str(reference),

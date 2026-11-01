@@ -107,8 +107,8 @@ def render_wellness():
             v=records[0]['values']
             goal_columns=st.columns(3)
             for i,(name,amount,target,unit) in enumerate([('Daily steps',v['steps'],step_goal,'steps'),('Weekly activity',v['exercise_days']*v['exercise_minutes'],exercise_goal,'min'),('Water',v['water_litres'],water_goal,'L'),('Sleep',v['sleep_hours'],sleep_goal,'h'),('Fruit/vegetables',v['fruit_veg'],fruit_goal,'servings')]):
-                with goal_columns[i%3]:progress_card(name,amount,target,unit,['#2563EB','#F97316','#06B6D4','#8B5CF6','#10B981'][i])
-            with goal_columns[2]:metric('Weight target',f"{weight_goal:g} kg",f"Latest: {v['weight_kg']:g} kg · difference: {v['weight_kg']-weight_goal:+g} kg",'#8B5CF6','◎')
+                with goal_columns[i%3]:progress_card(name,amount,target,unit,['#0E9AA7','#C98F1E','#5B8FA3','#14556B','#2E9477'][i])
+            with goal_columns[2]:metric('Weight target',f"{weight_goal:g} kg",f"Latest: {v['weight_kg']:g} kg · difference: {v['weight_kg']-weight_goal:+g} kg",'#14556B','◎')
             st.caption(f"Current weight: {v['weight_kg']:g} kg · target: {weight_goal:g} kg. Weight is a personal goal, not part of the score.")
         meals=food_history(owner)
         if meals:st.caption(f'{len(meals)} confirmed meal entries are saved in your nutrition history. Food photos do not automatically change the lifestyle score; use them to inform your next check-in.')

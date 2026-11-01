@@ -37,12 +37,12 @@ def render_patient_dashboard():
         if len(records)>1:
             a,b=st.columns(2)
             with a:trend(df,'Date','Wellness score','Your wellness journey',area=True)
-            with b:trend(df,'Date','Sleep (hours)','Sleep duration','#8B5CF6')
+            with b:trend(df,'Date','Sleep (hours)','Sleep duration','#14556B')
         else:st.info('One check-in saved. Save another to reveal your personal trends.')
         for col,args in zip(st.columns(3),[
-            ('Daily steps',v['steps'],goals.get('steps',8000),'steps','#2563EB'),
-            ('Water',v['water_litres'],goals.get('water',2),'L','#06B6D4'),
-            ('Fruit / vegetables',v['fruit_veg'],goals.get('fruit_veg',5),'servings','#10B981')]):
+            ('Daily steps',v['steps'],goals.get('steps',8000),'steps','#0E9AA7'),
+            ('Water',v['water_litres'],goals.get('water',2),'L','#5B8FA3'),
+            ('Fruit / vegetables',v['fruit_veg'],goals.get('fruit_veg',5),'servings','#2E9477')]):
             with col:progress_card(*args)
         st.caption('Progress reflects the latest self-reported check-in. Default targets are shown until you save your own goals.')
     with st.expander('Your 30×30 activity calendar',expanded=bool(days)):
