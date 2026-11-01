@@ -128,6 +128,8 @@ html, body, .stApp, [class*="css"] {
     font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .stApp { background: var(--ahead-bg); color: var(--ahead-text); }
+/* Streamlit's "Press Enter to submit form/apply" hint overlaps values in narrow inputs */
+[data-testid="InputInstructions"] { display: none !important; }
 [data-testid="stMainBlockContainer"] {
     max-width: 1240px; padding-top: 3.4rem; padding-bottom: 4rem;   /* clears the fixed 3.75rem header */
 }
