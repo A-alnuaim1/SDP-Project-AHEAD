@@ -59,5 +59,5 @@ def render_patient_dashboard():
     condition_cards('patient_dashboard')
     if assessments:
         section_heading('Recent saved assessments','Model scores are educational outputs, not diagnoses.')
-        st.dataframe(pd.DataFrame([{'Date':r['created_at'][:16],'Condition':r['disease'].title(),'Model':r['model'],'Score (%)':round(r['score']*100,1),'Result':'Flagged' if r['prediction'] else 'Not flagged'} for r in assessments[:8]]),hide_index=True,width='stretch')
+        st.dataframe(pd.DataFrame([{'Date':r['created_at'][:16],'Condition':r['disease'].title(),'Model':r['model'],'Score (%)':round(r['score']*100,1),'Threshold (%)':round(r['threshold']*100,1),'Result':'Flagged' if r['prediction'] else 'Not flagged'} for r in assessments[:8]]),hide_index=True,width='stretch')
     disclaimer()

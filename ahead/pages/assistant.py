@@ -79,7 +79,7 @@ LOCAL_ANSWERS = {
     ),
     "how do i use": (
         "1. Open **Screenings** and pick a condition.\n"
-        "2. Fill in the three sections of the form and press **Generate Screening Result**.\n"
+        "2. Fill in the form (lab values are optional unless marked as needed) and press **Generate Screening Result**.\n"
         "3. Read the gauge, the recommended next steps and the factors AHEAD identified.\n"
         "4. Explore **Data & Analytics** for datasets and model performance, or adjust your **Settings**.\n\n"
         "Doctor accounts also get a **Clinical Dashboard** for uploading patient files."

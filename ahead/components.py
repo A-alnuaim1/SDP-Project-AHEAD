@@ -241,11 +241,12 @@ def result_card(prediction: int, probability: float, disease_label: str, model_n
 # MODEL SELECTOR (shared by the patient predictor and the clinical dashboard)
 # =============================================================================
 
-def model_selector(disease: str, key: str, label: str = "Prediction model"):
+def model_selector(disease: str, key: str, label: str = "Prediction model", blank_labs: bool = False):
     """
     Selectbox of benchmark models (recommended first) + explanation expander.
     Returns (pipeline, model_name, threshold).  Falls back to the recommended
-    model if the chosen pickle has not been trained yet.
+    model if the chosen pickle has not been trained yet. *blank_labs* mentions the
+    lower threshold some models use when optional lab values are left blank.
     """
     recommended = best_model(disease)
     choices = available_models(disease) or [recommended]
@@ -267,6 +268,8 @@ def model_selector(disease: str, key: str, label: str = "Prediction model"):
         st.write(model_reason(disease))
         st.caption(
             "Alternative models are available for comparison and research. The recommended model "
-            "remains the default and is the only one with a tuned decision threshold."
+            "remains the default and is the only one with a tuned decision threshold"
+            + (" when every value is entered. If optional lab values are left blank, a model may use a lower "
+               "threshold measured for that case." if blank_labs else ".")
         )
     return pipeline, name, decision_threshold(disease, name)

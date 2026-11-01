@@ -233,7 +233,8 @@ PUBLIC_CONTENT = {
                              "sign in with Patient selected. Doctor / Admin accounts are set up by the project team.",
                              "Your screenings, lifestyle check-ins and medication records are saved to your account. "
                              "On the hosted demo they are reset whenever the app restarts, so use fictional data only."]),
-            ("2", "Run a screening", ["Open Screenings, pick a condition and complete the three sections of the form. "
+            ("2", "Run a screening", ["Open Screenings, pick a condition and fill in the form. Lab values are optional unless "
+                                     "marked as needed. "
                                      "AHEAD scores the answers with the recommended model (you can compare alternatives)."]),
             ("3", "Read the result", ["The gauge shows the model score against its decision threshold. Below it you will find "
                                      "next steps, the factors AHEAD noticed in your inputs, and an AI-generated explanation."]),

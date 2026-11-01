@@ -101,6 +101,7 @@ SDP-Project-AHEAD/
 │       ├── assistant.py    ← Ask AHEAD chat
 │       └── settings.py     ← settings tabs
 ├── train_model.py          ← benchmarks six model families per disease, saves models + metadata
+├── scripts/missing_inputs.py ← measures every model with optional inputs left blank
 ├── login.css               ← styles for the public (pre-login) pages
 ├── assets/                 ← favicon and SVG icons (inlined as data URIs)
 ├── static/                 ← large background images, served by Streamlit at app/static/…
@@ -108,7 +109,8 @@ SDP-Project-AHEAD/
 ├── models/
 │   ├── <disease>_model.pkl ← recommended pipeline per disease
 │   ├── all_models/         ← every benchmarked pipeline (<disease>_<model>.pkl)
-│   └── model_meta.json     ← features, metrics, thresholds, benchmark results
+│   ├── model_meta.json     ← features, metrics, thresholds, benchmark results
+│   └── missing_inputs.json ← test metrics and thresholds for blank optional inputs
 ├── .streamlit/config.toml  ← Streamlit theme + server settings
 └── requirements.txt
 ```
@@ -207,6 +209,10 @@ For each disease the script:
 5. tunes the heart model's probability threshold on the validation set,
 6. reports final metrics once on the untouched test set and writes `models/model_meta.json`.
 
+Then run `python scripts/missing_inputs.py`. It measures every saved diabetes and kidney model on the
+same test split with each allowed pattern of optional inputs left blank, and writes
+`models/missing_inputs.json`, which the result page uses for its figures and thresholds.
+
 ---
 
 ## How the machine learning works
@@ -216,6 +222,10 @@ For each disease the script:
 * **Prediction** — `predict_proba()` gives the probability of the disease class; the result is
   "elevated" when it reaches the model's decision threshold (0.5, or the tuned value for the
   recommended heart model).
+* **Optional inputs** — diabetes lab values and most kidney measurements can be left blank; the
+  pipeline's imputer fills them. Diabetes then uses a lower threshold chosen on the validation set
+  (never above the usual one), and the result page shows the model's measured test performance with
+  the same inputs blank. Kidney needs serum creatinine, eGFR and urine ACR before it gives a score.
 * **Interpretation** — tree models expose `feature_importances_`, Logistic Regression uses
   absolute coefficient magnitude; RBF-SVM has no per-feature importance.
 * **Rule-based factors** — independent of the model, the app highlights entered values that are

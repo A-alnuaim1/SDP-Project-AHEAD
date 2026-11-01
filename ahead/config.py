@@ -31,8 +31,8 @@ DISEASES = {
         "card_title": "Diabetes Screening",
         "page_title": "Diabetes Risk Assessment",
         "page_subtitle": (
-            "Complete the lifestyle, medical-history and clinical sections to "
-            "generate an early-awareness diabetes screening estimate."
+            "Complete the lifestyle and medical-history sections, and add lab values if you have them, "
+            "to generate an early-awareness diabetes screening estimate."
         ),
         "card_copy": "Lifestyle, medical history, HbA1c and blood-glucose information.",
         "icon": "conditions/diabetes.svg",
@@ -61,7 +61,7 @@ DISEASES = {
         "card_title": "Kidney Health Screening",
         "page_title": "Kidney Health Assessment",
         "page_subtitle": (
-            "Complete the lifestyle, family-history and clinical-laboratory sections "
+            "Complete the lifestyle and family-history sections and add your kidney test results "
             "to generate a chronic kidney disease screening estimate."
         ),
         "card_copy": "Lifestyle, family history and kidney-related clinical measurements.",
@@ -102,20 +102,40 @@ FEATURE_GROUPS = {
             "FamilyHistoryKidneyDisease", "FamilyHistoryHypertension",
             "FamilyHistoryDiabetes", "Edema",
         ],
+        "Blood Pressure": ["SystolicBP", "DiastolicBP"],
         "Clinical Measurements": [
-            "SystolicBP", "DiastolicBP", "FastingBloodSugar", "HbA1c",
-            "SerumCreatinine", "BUNLevels", "GFR", "ProteinInUrine", "ACR",
-            "HemoglobinLevels",
+            "SerumCreatinine", "GFR", "ACR", "FastingBloodSugar", "HbA1c",
+            "BUNLevels", "ProteinInUrine", "HemoglobinLevels",
         ],
     },
 }
+
+# Measurements a patient may not have to hand. A blank one reaches the model as missing and is
+# filled by the pipeline's median imputer; the result page then says so.
+OPTIONAL_INPUTS = {
+    "diabetes": ["HbA1c_level", "blood_glucose_level"],
+    "kidney": FEATURE_GROUPS["kidney"]["Blood Pressure"] + FEATURE_GROUPS["kidney"]["Clinical Measurements"],
+}
+
+# The standard kidney tests. AHEAD asks for all three before giving a kidney estimate; how the
+# models do with the other optional inputs blank is measured by scripts/missing_inputs.py.
+REQUIRED_FOR_SCORE = {"kidney": ["SerumCreatinine", "GFR", "ACR"]}
 
 GROUP_DESCRIPTIONS = {
     "Lifestyle & Patient Profile": "Demographic information and everyday lifestyle factors.",
     "General Health": "Overall physical and mental health indicators.",
     "Medical History": "Previous conditions relevant to this assessment.",
     "Family & Medical History": "Family history and current medical indicators.",
-    "Clinical Measurements": "Laboratory results and measurable clinical values.",
+    "Blood Pressure": "Optional. A recent home or pharmacy reading is fine.",
+    "Clinical Measurements": "Optional. Values from a recent blood test; leave any you don't have blank.",
+}
+
+# Per-condition wording where a shared section means something different.
+DISEASE_GROUP_DESCRIPTIONS = {
+    "kidney": {
+        "Clinical Measurements": "From a recent blood or urine test. Serum creatinine, eGFR and urine ACR are "
+                                 "needed for a kidney estimate; leave any others you don't have blank.",
+    },
 }
 
 FIELD_LABELS = {

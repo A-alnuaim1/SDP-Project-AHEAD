@@ -110,6 +110,27 @@ def decision_threshold(disease: str, model_name: str | None = None) -> float:
     return float(meta(disease).get("decision_threshold", 0.5))
 
 
+@st.cache_data(show_spinner=False)
+def _missing_inputs() -> dict:
+    path = MODELS_DIR / "missing_inputs.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def missing_inputs_profile(disease: str, model_name: str, missing: list) -> dict | None:
+    """
+    How *model_name* did on the held-out test split with these optional inputs left blank
+    (scripts/missing_inputs.py): the threshold to apply, its test metrics under "test", the
+    full-input metrics under "full" and the number of test negatives. None if not measured.
+    """
+    data = _missing_inputs().get(disease, {})
+    entries = data.get("models", {}).get(model_name, {})
+    entry = entries.get("+".join(sorted(missing)))
+    if entry is None:
+        return None
+    return {**entry, "full": entries.get("", {}).get("test"),
+            "test_negatives": data.get("test_counts", {}).get("negative")}
+
+
 def n_samples(disease: str) -> int:
     return int(meta(disease).get("n_samples", 0))
 
