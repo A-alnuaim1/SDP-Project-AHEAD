@@ -44,7 +44,7 @@ class PlatformTests(unittest.TestCase):
     def test_wellness_and_history(self):
         v={'weight_kg':75,'height_cm':175,'exercise_days':3,'exercise_minutes':30,'steps':7000,
            'sleep_hours':7,'sleep_quality':3,'water_litres':2,'fruit_veg':3,'fast_food':2,
-           'sugary_food':2,'balanced_meals':True,'smoking':False,'stress':4,'sedentary_hours':6}
+           'sugary_food':2,'stress':4,'sedentary_hours':6}
         outcome=evaluate(v)
         self.assertTrue(0<=outcome['overall']<=100)
         save_lifestyle(self.p,v,outcome)

@@ -40,8 +40,6 @@ def render_wellness():
                 fruit=st.number_input(tr('Fruit/vegetable servings per day'),0,20,2)
                 sugar=st.number_input(tr('Sugary foods/drinks per week'),0,50,3)
                 fast=st.number_input(tr('Fast food meals per week'),0,21,2)
-                balanced=st.checkbox(tr('Usually eat balanced meals'))
-                smoking=st.checkbox(tr('Currently smoke'))
                 stress=st.slider(tr('Stress (0–10)'),0,10,5)
                 sedentary=st.number_input(tr('Hours sitting per day'),0.0,24.0,7.0,step=0.5)
             submitted=st.form_submit_button(tr('Save lifestyle check-in'),type='primary')
@@ -49,7 +47,7 @@ def render_wellness():
             values={'age':age,'height_cm':height,'weight_kg':weight,'steps':steps,'activity_level':active,
                     'exercise_days':days,'exercise_minutes':minutes,'sleep_hours':sleep,'sleep_quality':quality,
                     'water_litres':water,'fruit_veg':fruit,'sugary_food':sugar,'fast_food':fast,
-                    'balanced_meals':balanced,'smoking':smoking,'stress':stress,'sedentary_hours':sedentary}
+                    'stress':stress,'sedentary_hours':sedentary}
             result=evaluate(values,goals)
             save_lifestyle(owner,values,result)
             st.success(tr('Check-in saved. Your lifestyle summary is below.'))

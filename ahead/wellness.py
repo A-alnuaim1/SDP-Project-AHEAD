@@ -15,11 +15,11 @@ def evaluate(v, goals=None):
     water_goal=max(0.5,float(goals.get('water',2.0)))
     sleep_goal=max(6,float(goals.get('sleep',8)))
     weekly_goal=max(30,int(goals.get('exercise',150)))
-    nutrition=clamp(40+min(v['fruit_veg'],5)*10-min(v['fast_food'],7)*4-min(v['sugary_food'],7)*4+(10 if v['balanced_meals'] else 0))
+    nutrition=clamp(50+min(v['fruit_veg'],5)*10-min(v['fast_food'],7)*4-min(v['sugary_food'],7)*4)
     activity=clamp(15+min(v['steps']/step_goal,1)*35+min(minutes/weekly_goal,1)*45-min(v['sedentary_hours'],16)*1.5)
     sleep=clamp(100-abs(v['sleep_hours']-sleep_goal)*13+(v['sleep_quality']-3)*7)
     hydration=clamp(100*min(v['water_litres']/water_goal,1))
-    habits=clamp(90-(30 if v['smoking'] else 0)-v['stress']*6-min(v['sedentary_hours'],16)*2)
+    habits=clamp(90-v['stress']*6-min(v['sedentary_hours'],16)*2)
     categories={'Nutrition':nutrition,'Activity':activity,'Sleep':sleep,'Hydration':hydration,'Habits':habits}
     overall=round(sum(categories.values())/len(categories))
     why={
@@ -27,14 +27,14 @@ def evaluate(v, goals=None):
         'Activity':f"{v['steps']:,} steps/day against your {step_goal:,} goal, and {minutes} exercise minutes/week against {weekly_goal}.",
         'Sleep':f"{v['sleep_hours']} hours/night against your {sleep_goal:g}-hour goal; quality rated {v['sleep_quality']}/5.",
         'Hydration':f"{v['water_litres']:g} L/day against your {water_goal:g} L personal goal.",
-        'Habits':f"Stress rated {v['stress']}/10; sitting {v['sedentary_hours']:g} hours/day; smoking: {'yes' if v['smoking'] else 'no'}."
+        'Habits':f"Stress rated {v['stress']}/10; sitting {v['sedentary_hours']:g} hours/day."
     }
     suggestions=[]
     if activity<70:suggestions.append('If comfortable, add a short walk or another activity you enjoy and increase gradually.')
     if sleep<70:suggestions.append('Try a consistent bedtime and discuss persistent sleep problems with a professional.')
     if hydration<70:suggestions.append('Keep water available and drink regularly; ask a clinician about fluid limits if you have one.')
     if nutrition<70:suggestions.append('Try adding fruit or vegetables to meals and reducing frequent sugary or fast-food choices.')
-    if habits<70:suggestions.append('Consider short movement breaks and stress-management support; seek help to stop smoking if applicable.')
+    if habits<70:suggestions.append('Consider short movement breaks and stress-management support.')
     if not suggestions:suggestions.append('Keep up habits that work for you and review your goals as circumstances change.')
     return {'overall':overall,'categories':categories,'explanations':why,'recommendations':suggestions,'bmi':round(v['weight_kg']/(v['height_cm']/100)**2,1),'exercise_weekly_minutes':minutes}
 
