@@ -11,7 +11,7 @@ import os
 import streamlit as st
 
 from ahead.config import BASE, ROLE_DOCTOR, ROLE_PATIENT
-from ahead.resources import icon_uri, static_url
+from ahead.resources import icon_uri, image_data_uri, static_url
 from ahead.storage import authenticate, create_user, ephemeral_storage, has_doctor_account, load_screenings
 from ahead.config import DISEASES
 from datetime import datetime
@@ -112,7 +112,7 @@ def render_login() -> None:
                 f"""
 <div class="ahead-login-brand">
     <div class="ahead-login-logo">
-        <div class="ahead-login-logo-icon">✚</div>
+        <img class="ahead-login-logo-icon" src="{image_data_uri('logo.svg')}" alt="AHEAD logo">
         <div class="ahead-login-logo-text">AHEAD</div>
     </div>
     <h1>Advanced Health<br>Early Awareness and<br>Disease Detection System</h1>

@@ -27,6 +27,7 @@ st.set_page_config(
 
 from ahead.components import current_user, go_to, init_state, logout, open_assistant  # noqa: E402
 from ahead.config import NAV_ITEMS  # noqa: E402
+from ahead.resources import image_data_uri  # noqa: E402
 from ahead.pages.analytics import render_analytics  # noqa: E402
 from ahead.pages.assistant import render_assistant  # noqa: E402
 from ahead.pages.clinical import render_clinical_dashboard  # noqa: E402
@@ -90,9 +91,9 @@ active = st.session_state.nav
 
 with st.sidebar:
     st.html(
-        """
+        f"""
 <div class="sidebar-brand">
-    <div class="brand-symbol">✚</div>
+    <img class="brand-symbol" src="{image_data_uri('logo.svg')}" alt="AHEAD logo">
     <div>
         <h2>AHEAD</h2>
         <p>Clinical Screening &amp;<br>Early Awareness Platform</p>

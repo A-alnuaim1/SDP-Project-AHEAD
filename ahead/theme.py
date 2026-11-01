@@ -162,9 +162,8 @@ h1, h2, h3, h4, h5, h6 { color: var(--ahead-title); }
 
 .sidebar-brand { display: flex; align-items: center; gap: 12px; margin: 0 0 4px 2px; }
 .brand-symbol {
-    width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
-    background: linear-gradient(135deg, #14BFC0, #83DDD7); color: #073B52 !important;
-    font-size: 22px; font-weight: 800; flex: 0 0 auto;
+    width: 42px; height: 42px; border-radius: 11px; flex: 0 0 auto; display: block;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.22), 0 6px 14px rgba(0,0,0,0.18);   /* keeps the dark tile apart from the dark sidebar */
 }
 .sidebar-brand h2 { margin: 0; color: #FFFFFF !important; font-size: 1.28rem; font-weight: 800; line-height: 1.1; letter-spacing: -0.02em; }
 .sidebar-brand p { margin: 3px 0 0; color: #BDD0DB !important; font-size: 0.66rem; line-height: 1.35; }
