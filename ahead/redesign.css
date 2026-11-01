@@ -60,9 +60,12 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible 
 [data-testid="stNumberInputContainer"]:focus-within,[data-testid="stTextInputRootElement"]:focus-within {box-shadow:0 0 0 3px #0E9AA722!important;border-color:#0E9AA7!important;}
 [data-testid="stFileUploader"] section {border:2px dashed #14556B!important;border-radius:18px!important;background:color-mix(in srgb,#14556B 5%,var(--ahead-card))!important;}
 [data-testid="stImage"] img {border-radius:20px;}
-[data-baseweb="tab-list"],[role="tablist"] {gap:8px!important;padding:6px!important;border-radius:15px;background:var(--ahead-soft);overflow-x:auto!important;}
-button[role="tab"] {padding:8px 15px!important;border-radius:10px!important;white-space:nowrap;}
-button[role="tab"][aria-selected="true"] {background:var(--ahead-card)!important;color:var(--ahead-accent)!important;box-shadow:0 3px 9px #102a530c;}
+[data-testid="stMain"] [role="tablist"] {gap:8px!important;padding:2px 0 6px!important;height:auto!important;background:transparent!important;border:none!important;overflow-x:auto!important;}
+[data-testid="stMain"] [role="tablist"]::after,[data-testid="stMain"] [role="tab"] .react-aria-SelectionIndicator {display:none!important;}
+[data-testid="stMain"] [role="tab"] {height:auto!important;padding:9px 18px!important;border:1.5px solid var(--ahead-border)!important;border-radius:12px!important;background:var(--ahead-card)!important;white-space:nowrap;cursor:pointer;transition:border-color .15s ease;}
+[data-testid="stMain"] [role="tab"] p {color:var(--ahead-muted)!important;font-weight:500;}
+[data-testid="stMain"] [role="tab"]:hover,[data-testid="stMain"] [role="tab"][aria-selected="true"] {border-color:var(--ahead-accent)!important;}
+[data-testid="stMain"] [role="tab"][aria-selected="true"] p {color:var(--ahead-accent)!important;font-weight:600;}
 [data-testid="stExpander"] details {border-radius:16px!important;}
 .action-card {border-inline-start:4px solid var(--ahead-accent);background:var(--ahead-card);border-radius:16px;}
 .action-number {background:var(--ahead-accent-soft)!important;color:var(--ahead-accent-strong)!important;}
