@@ -6,7 +6,7 @@ from ahead.components import condition_cards, empty_state, go_to, section_headin
 from ahead.platform_data import lifestyle_history,get_goals,challenge_days,scheduled_doses,local_today
 from ahead.storage import load_screenings
 from ahead.wellness import challenge_summary
-from ahead.visuals import metric,score_ring,progress_card,category_chart,trend,calendar,COLORS
+from ahead.visuals import summary_card,score_ring,progress_card,category_chart,trend,calendar,COLORS
 
 
 def render_patient_dashboard():
@@ -14,14 +14,18 @@ def render_patient_dashboard():
     records=lifestyle_history(owner); goals=get_goals(owner); days=challenge_days(owner)
     assessments=load_screenings(owner); today=local_today(); challenge=challenge_summary(days)
     due=[d for d in scheduled_doses(owner,today,today) if d['status'] in ('upcoming','missed')]
-    cards=[('Saved assessments',len(assessments),'Your disease screening history','#2563EB','✚','screenings'),
-           ('Personal targets',len(goals),'Configured lifestyle goals','#8B5CF6','◎','wellness'),
-           ('Challenge days',f"{challenge['completed']} / 30",'Days with at least 30 minutes','#F97316','↗','wellness'),
-           ('Doses to check',len(due),'Scheduled today, not yet logged','#06B6D4','◷','medications')]
-    for col,(label,value,note,color,icon,page) in zip(st.columns(4),cards):
+    goal_count=min(len(goals),6)
+    cards=[('screenings','Screenings saved',len(assessments),None,'#8E7CC3','screenings',
+            'Your saved screening results' if assessments else 'Take your first screening to start your history',
+            'View screenings' if assessments else 'Start a screening'),
+           ('goals','Goals set',goal_count,6,'#2E9477','wellness','Targets for steps, sleep, water and more',
+            'Review goals' if goal_count else 'Set goals'),
+           ('challenge','Challenge days',challenge['completed'],30,'#C98F1E','wellness','Days with 30+ active minutes','Log activity'),
+           ('doses','Doses today',len(due),None,'#C9706E','medications',
+            'Scheduled today, not yet logged' if due else 'All caught up for today','Medications')]
+    for col,(icon,label,value,total,color,page,note,action) in zip(st.columns(4),cards):
         with col:
-            metric(label,value,note,color,icon)
-            if st.button('View →',key=f'dashboard_{page}_{icon}',width='stretch'):go_to(page)
+            if summary_card(f'dashboard_{icon}',label,value,note,action,color,icon,total):go_to(page)
     section_heading('Your wellness, at a glance','Small check-ins help you see how your habits change.')
     if not records:
         empty_state('◉','Your story starts with one check-in','Record your lifestyle to unlock your score, trends and personal progress.')
