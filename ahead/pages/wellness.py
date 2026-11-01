@@ -38,8 +38,8 @@ def render_wellness():
                 water=st.number_input(tr('Water (litres/day)'),0.0,12.0,1.5,step=0.25)
             with c:
                 fruit=st.number_input(tr('Fruit/vegetable servings per day'),0,20,2)
-                sugar=st.number_input(tr('Sugary foods/drinks per week'),0,50,3)
-                fast=st.number_input(tr('Fast food meals per week'),0,21,2)
+                sugar=st.number_input(tr('Sugary foods/drinks per day'),0,20,1)
+                fast=st.number_input(tr('Fast food meals per day'),0,10,0)
                 stress=st.slider(tr('Stress (0–10)'),0,10,5)
                 sedentary=st.number_input(tr('Hours sitting per day'),0.0,24.0,7.0,step=0.5)
             submitted=st.form_submit_button(tr('Save lifestyle check-in'),type='primary')

@@ -15,7 +15,7 @@ def evaluate(v, goals=None):
     water_goal=max(0.5,float(goals.get('water',2.0)))
     sleep_goal=max(6,float(goals.get('sleep',8)))
     weekly_goal=max(30,int(goals.get('exercise',150)))
-    nutrition=clamp(50+min(v['fruit_veg'],5)*10-min(v['fast_food'],7)*4-min(v['sugary_food'],7)*4)
+    nutrition=clamp(50+min(v['fruit_veg'],5)*10-min(v['fast_food'],2)*14-min(v['sugary_food'],4)*7)
     activity=clamp(15+min(v['steps']/step_goal,1)*35+min(minutes/weekly_goal,1)*45-min(v['sedentary_hours'],16)*1.5)
     sleep=clamp(100-abs(v['sleep_hours']-sleep_goal)*13+(v['sleep_quality']-3)*7)
     hydration=clamp(100*min(v['water_litres']/water_goal,1))
@@ -23,7 +23,7 @@ def evaluate(v, goals=None):
     categories={'Nutrition':nutrition,'Activity':activity,'Sleep':sleep,'Hydration':hydration,'Habits':habits}
     overall=round(sum(categories.values())/len(categories))
     why={
-        'Nutrition':f"Fruit/vegetable servings: {v['fruit_veg']}/day; fast food: {v['fast_food']}/week; sugary foods/drinks: {v['sugary_food']}/week.",
+        'Nutrition':f"Fruit/vegetable servings: {v['fruit_veg']}/day; fast food: {v['fast_food']}/day; sugary foods/drinks: {v['sugary_food']}/day.",
         'Activity':f"{v['steps']:,} steps/day against your {step_goal:,} goal, and {minutes} exercise minutes/week against {weekly_goal}.",
         'Sleep':f"{v['sleep_hours']} hours/night against your {sleep_goal:g}-hour goal; quality rated {v['sleep_quality']}/5.",
         'Hydration':f"{v['water_litres']:g} L/day against your {water_goal:g} L personal goal.",

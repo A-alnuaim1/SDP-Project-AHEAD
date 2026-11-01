@@ -10,7 +10,7 @@ test_directory=tempfile.TemporaryDirectory();root=test_directory.name;os.environ
 init_db();init_platform()
 for email,role in [('patient@test.local','Patient'),('doctor@test.local','Doctor')]:create_user(email,'test-password-123',role,role+' Test')
 p=authenticate('patient@test.local','test-password-123','Patient');d=authenticate('doctor@test.local','test-password-123','Doctor')
-v={'age':30,'height_cm':175,'weight_kg':75,'steps':6500,'activity_level':'Some movement','exercise_days':3,'exercise_minutes':30,'sleep_hours':7,'sleep_quality':3,'water_litres':1.5,'fruit_veg':3,'sugary_food':2,'fast_food':2,'stress':3,'sedentary_hours':6}
+v={'age':30,'height_cm':175,'weight_kg':75,'steps':6500,'activity_level':'Some movement','exercise_days':3,'exercise_minutes':30,'sleep_hours':7,'sleep_quality':3,'water_litres':1.5,'fruit_veg':3,'sugary_food':1,'fast_food':0,'stress':3,'sedentary_hours':6}
 
 def pages(user,names):
     for page in names:
