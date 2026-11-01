@@ -109,7 +109,7 @@ with st.sidebar:
         for key, label, _icon, _doctor_only in visible_nav:
             group = ('Care & insights' if key in ('clinical','intelligence','analytics') else
                      'My health' if key in ('wellness','food','medications') else
-                     'Support & account' if key in ('notifications','assistant','settings') else 'Workspace')
+                     'Support & account' if key in ('notifications','assistant','settings') else None)
             if group != previous_group:
                 st.html(f'<div class="sidebar-section-label">{group}</div>')
                 previous_group = group

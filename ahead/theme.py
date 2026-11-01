@@ -169,7 +169,8 @@ h1, h2, h3, h4, h5, h6 { color: var(--ahead-title); }
 }
 .sidebar-brand h2 { margin: 0; color: #FFFFFF !important; font-size: 1.28rem; font-weight: 800; line-height: 1.1; letter-spacing: -0.02em; }
 .sidebar-brand p { margin: 3px 0 0; color: #BDD0DB !important; font-size: 0.66rem; line-height: 1.35; }
-.sidebar-divider { height: 1px; background: rgba(255,255,255,0.12); margin: 16px 0 12px; }
+.sidebar-divider { height: 1px; background: rgba(255,255,255,0.12); margin: 16px 0 0; }
+.st-key-sidebar_nav { margin-top: -6px; }
 .sidebar-section-label { color: #8FB0C0 !important; font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; margin: 4px 0 6px 12px; }
 
 .st-key-sidebar_nav { gap: 3px !important; }
