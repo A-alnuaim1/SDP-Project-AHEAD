@@ -271,30 +271,39 @@ h1, h2, h3, h4, h5, h6 { color: var(--ahead-title); }
 .metric-value { color: var(--ahead-title); font-size: clamp(1.1rem, 1.6vw, 1.55rem); font-weight: 760; margin-top: 4px; line-height: 1.1; overflow-wrap: anywhere; }
 .metric-foot { color: var(--ahead-accent); font-size: 0.68rem; margin-top: 5px; }
 
-/* condition cards — the keyed container is the card, so the button sits inside it */
+/* condition cards — the keyed container is the card, tinted with its condition's colour (--condition) */
 [class*="_condition_card"] {
+    --condition: var(--ahead-accent);
     position: relative; overflow: hidden; gap: 0 !important;
-    background: var(--ahead-card); border: 1px solid var(--ahead-border); border-radius: 18px; box-shadow: var(--ahead-shadow);
-    padding: 26px 22px 20px; height: 100%;
+    background: color-mix(in srgb, var(--condition) 9%, var(--ahead-card));
+    border: 1.5px solid color-mix(in srgb, var(--condition) 30%, var(--ahead-card)); border-radius: 18px;
+    padding: 24px 22px 20px; height: 100%; cursor: pointer;
     transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
 }
-[class*="_condition_card"]:hover { transform: translateY(-3px); box-shadow: 0 16px 34px rgba(16,44,66,0.12); border-color: var(--ahead-accent); }
-.condition-stripe { height: 5px; margin: -26px -22px 22px; }   /* pulled up through the card padding */
+[class*="_condition_card"]:hover {
+    transform: translateY(-3px); border-color: var(--condition);
+    box-shadow: 0 14px 30px color-mix(in srgb, var(--condition) 20%, transparent);
+}
+[class*="_condition_card"]:has(button:focus-visible) { outline: 3px solid var(--condition); outline-offset: 3px; }
+/* equal-height cards: the wrapper fills its column, and the card body fills the card so the footer sits at the bottom */
+[data-testid="stLayoutWrapper"]:has(> [class*="_condition_card"]) { flex: 1 1 auto; }
+[class*="_condition_card"] > [data-testid="stElementContainer"]:has(.condition-foot) { flex: 1 1 auto; }
+[class*="_condition_card"] [data-testid="stHtml"]:has(.condition-foot) { display: flex; flex-direction: column; height: 100%; }
 .condition-icon {
     width: 54px; height: 54px; border-radius: 16px; display: flex; align-items: center; justify-content: center;
     margin-bottom: 16px; box-shadow: 0 8px 18px rgba(16,44,66,0.16);
 }
 .condition-icon img { width: 28px; height: 28px; }
-.condition-title { color: var(--ahead-title); font-size: 1.05rem; font-weight: 720; margin: 0; letter-spacing: -0.01em; }
-.condition-copy { color: var(--ahead-muted); font-size: 0.8rem; line-height: 1.6; margin: 8px 0 0; min-height: 3.2em; }
-.condition-meta {
-    display: inline-flex; align-items: center; gap: 6px; margin: 14px 0 14px;
-    color: var(--ahead-accent); background: var(--ahead-accent-soft); border-radius: 100px; padding: 4px 10px;
-    font-size: 0.66rem; font-weight: 650; letter-spacing: 0.02em;
-}
-[class*="_condition_card"] .stButton { margin-top: auto; }
-[class*="_condition_card"] .stButton p { white-space: nowrap; }
-[class*="_condition_card"] [data-testid="stElementContainer"]:has(> .stButton) { margin-top: auto; }
+.condition-title { color: color-mix(in srgb, var(--condition) 50%, var(--ahead-title)); font-size: 1.05rem; font-weight: 720; margin: 0; letter-spacing: -0.01em; }
+.condition-copy { color: color-mix(in srgb, var(--condition) 25%, var(--ahead-muted)); font-size: 0.8rem; line-height: 1.6; margin: 8px 0 0; min-height: 3.2em; }
+.condition-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: auto; padding-top: 18px; font-size: 0.74rem; white-space: nowrap; }
+.condition-meta { color: color-mix(in srgb, var(--condition) 25%, var(--ahead-muted)); font-weight: 550; }
+.condition-go { margin-left: auto; color: color-mix(in srgb, var(--condition) 75%, var(--ahead-title)); font-weight: 700; transition: transform .2s ease; }
+[class*="_condition_card"]:hover .condition-go { transform: translateX(3px); }
+/* the real Streamlit button is stretched invisibly over the card, so the whole card is the click target */
+[class*="_condition_card"] [data-testid="stElementContainer"]:has(> .stButton) { position: absolute; inset: 0; z-index: 2; margin: 0 !important; }
+[class*="_condition_card"] .stButton, [class*="_condition_card"] .stButton button { width: 100% !important; height: 100% !important; }
+[class*="_condition_card"] .stButton button { opacity: 0; cursor: pointer; }
 
 /* stepper */
 .stepper { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0 18px; }

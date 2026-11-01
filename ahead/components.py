@@ -177,24 +177,29 @@ def empty_state(icon: str, title: str, text: str) -> None:
 
 
 def condition_cards(key_prefix: str, button_label: str = "Start screening", note: str | None = None) -> None:
-    """Three condition cards (icon, copy, inputs count, start button). Navigates to the predictor on click."""
+    """Three condition cards tinted in each condition's colour. The whole card is the start button."""
+    st.html("<style>" + "".join(
+        f'[class*="_{disease}_condition_card"] {{ --condition: {info["colour"]}; }}' for disease, info in DISEASES.items()
+    ) + "</style>")
     columns = st.columns(3)
     for column, (disease, info) in zip(columns, DISEASES.items()):
         count = len(features(disease))
-        meta = note or f"{count} inputs · ~{max(2, round(count / 6))} min"
+        meta = note or f"{count} questions · ~{max(2, round(count / 6))} min"
         with column, st.container(key=f"{key_prefix}_{disease}_condition_card"):
             st.html(
                 f"""
-<div class="condition-stripe" style="background:{info['colour']};"></div>
 <div class="condition-icon" style="background:linear-gradient(135deg, {info['colour']}, color-mix(in srgb, {info['colour']} 72%, white));">
     <img src="{icon_uri(info['icon'])}" alt="">
 </div>
 <h3 class="condition-title">{escape(info['card_title'])}</h3>
 <p class="condition-copy">{escape(info['card_copy'])}</p>
-<div class="condition-meta">{escape(meta)}</div>
+<div class="condition-foot">
+    <span class="condition-meta">{escape(meta)}</span>
+    <span class="condition-go" aria-hidden="true">{escape(button_label)} →</span>
+</div>
 """
             )
-            if st.button(f"{button_label} →", key=f"{key_prefix}_{disease}", width="stretch", type="primary"):
+            if st.button(f"{button_label} →", key=f"{key_prefix}_{disease}", width="stretch"):
                 go_to("screenings", disease)
 
 

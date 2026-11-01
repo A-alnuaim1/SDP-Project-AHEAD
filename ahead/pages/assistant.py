@@ -36,7 +36,7 @@ SYSTEM_PROMPT = (
     "creatinine, BUN, hemoglobin), and how to use the website (Overview, Screenings, Health & Lifestyle Tracker, "
     "Food Nutrition Analyzer, Medication Monitoring, Notifications, Data & Analytics, Settings, and for doctors the "
     "Clinical Dashboard and Patient Intelligence). Users may speak their questions; their words arrive already "
-    "transcribed, and your answer may be read aloud, so prefer plain sentences over tables. "
+    "transcribed, and your answer may be read aloud, so prefer plain sentences over tables. Always reply in English. "
     "Give general educational information only. Do not diagnose "
     "a person, do not claim a screening result confirms disease, and do not recommend starting, stopping or "
     "changing prescription medication. For urgent symptoms advise appropriate urgent medical care. "
@@ -194,7 +194,7 @@ if (!synth || !host.SpeechSynthesisUtterance) {{
 }} else {{
   synth.cancel();
   const u = new host.SpeechSynthesisUtterance(text);
-  u.lang = /[\u0600-\u06FF]/.test(text) ? 'ar-SA' : 'en-US';
+  u.lang = 'en-US';
   u.onend = () => {{ msg.textContent = '🔊 Finished reading.'; stop.remove(); }};
   stop.onclick = () => {{ synth.cancel(); msg.textContent = 'Stopped.'; stop.remove(); }};
   synth.speak(u);
