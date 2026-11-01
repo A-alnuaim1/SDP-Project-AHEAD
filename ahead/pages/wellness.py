@@ -17,7 +17,7 @@ from ahead.theme import style_figure
 
 def render_wellness():
     owner=st.session_state.user['id']
-    page_header('Patient wellness','Health & Lifestyle Tracker','A general lifestyle check-in separate from disease screening.')
+    page_header('Patient wellness','Health & Lifestyle Tracker','Check in on your lifestyle, follow your progress and build healthier routines.')
     st.info('Lifestyle scores are educational summaries of your entries, not diagnoses or clinical risk scores.')
     goals=get_goals(owner)
     tracker,history,goal_tab,challenge=st.tabs([tr('Check-in'),tr('Progress'),tr('Goals'),tr('30×30 Challenge')])

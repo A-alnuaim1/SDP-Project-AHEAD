@@ -63,6 +63,7 @@ AR.update({
     'Sleep target (h)':'هدف النوم (ساعات)','Fruit/vegetable servings target':'هدف حصص الفواكه والخضار',
     'Save goals':'حفظ الأهداف','Goals saved.':'تم حفظ الأهداف.',
     'Activity date':'تاريخ النشاط','Save activity':'حفظ النشاط',
+    'Check in on your lifestyle, follow your progress and build healthier routines.':'تابع نمط حياتك، وراقب تقدّمك، وابنِ عادات صحية أفضل.',
     'Log activity':'سجّل نشاطك','When':'متى','Yesterday':'أمس','Other date':'تاريخ آخر','Pick a day':'اختر اليوم',
     'How long':'المدة','15 min':'١٥ دقيقة','30 min':'٣٠ دقيقة','45 min':'٤٥ دقيقة','60 min':'٦٠ دقيقة','Custom':'مخصص',
     'Minutes':'الدقائق','min':'دقيقة','Already logged for this day':'المسجّل لهذا اليوم','Saving replaces it.':'الحفظ سيستبدله.',
