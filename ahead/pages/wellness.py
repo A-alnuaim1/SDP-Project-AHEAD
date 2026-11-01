@@ -111,7 +111,8 @@ def render_wellness():
         meals=food_history(owner)
         if meals:st.caption(f'{len(meals)} confirmed meal entries are saved in your nutrition history. Food photos do not automatically change the lifestyle score; use them to inform your next check-in.')
     with challenge:
-        st.caption('Independent activity challenge inspired by 30 minutes a day for 30 days. Not affiliated with Dubai Fitness Challenge.')
+        st.markdown(f"**{tr('Move for at least 30 minutes a day, 30 days in a row.')}** "
+                    f"{tr('Walking, cycling, sports and anything else that gets you moving all count. Log your minutes each day: every day you reach 30 minutes is marked complete on the calendar and adds to your streak.')}")
         days=challenge_days(owner)
         start=min((date.fromisoformat(day) for day in days),default=local_today())
         status=challenge_summary(days,start)
