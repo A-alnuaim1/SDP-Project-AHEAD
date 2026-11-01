@@ -6,7 +6,7 @@ import plotly.express as px
 import streamlit as st
 
 from ahead.components import page_header
-from ahead.i18n import tr
+from ahead.i18n import arabic,tr
 from ahead.platform_data import (challenge_days,food_history,get_goals,lifestyle_history,
                                  save_lifestyle,set_challenge_day,set_goals)
 from ahead.wellness import challenge_summary,evaluate
@@ -119,11 +119,29 @@ def render_wellness():
         cols=st.columns(4)
         for col,label,value in zip(cols,['Day','Completed','Current streak','Longest streak'],[f"{status['day']}/30",f"{status['completed']}/30",status['streak'],status['longest']]):col.metric(tr(label),value)
         st.progress(status['percent']/100,text=f"{status['percent']}% of 30 days")
-        chosen=st.date_input(tr('Activity date'),value=local_today(),min_value=local_today()-timedelta(days=60),max_value=local_today())
-        activity=st.number_input(tr('Activity minutes'),0,1440,int(days.get(chosen.isoformat(),0)))
-        if st.button(tr('Save activity'),type='primary'):
-            if (chosen-start).days>=30:st.error('This challenge began more than 30 days before the selected date. Choose a day within your 30-day window.')
-            else:set_challenge_day(owner,chosen.isoformat(),activity);st.rerun()
+        if saved:=st.session_state.pop('activity_saved',None):st.toast(saved,icon=':material/check_circle:')
+        with st.container(key='activity_log'):
+            st.markdown(f"**:material/directions_run: {tr('Log activity')}**")
+            today=local_today()
+            when=st.pills(tr('When'),['Today','Yesterday','Other date'],default='Today',required=True,format_func=tr,key='activity_when')
+            if when=='Other date':
+                chosen=st.date_input(tr('Pick a day'),value=today-timedelta(days=2),min_value=today-timedelta(days=29),max_value=today,format='DD/MM/YYYY',width=260)
+            else:
+                chosen=today-timedelta(days=1 if when=='Yesterday' else 0)
+            logged=int(days.get(chosen.isoformat(),0))
+            length=st.pills(tr('How long'),['15 min','30 min','45 min','60 min','Custom'],default='30 min',required=True,format_func=tr,key='activity_length')
+            activity=st.number_input(tr('Minutes'),0,1440,logged or 30,width=260) if length=='Custom' else int(length.split()[0])
+            if logged:st.caption(f"{tr('Already logged for this day')}: {logged} {tr('min')}. {tr('Saving replaces it.')}")
+            with st.container(horizontal=True,vertical_alignment='center'):
+                clicked=st.button(tr('Save activity'),type='primary')
+                st.caption(':material/check_circle: '+tr('30 minutes or more counts as a complete day.'))
+            if clicked:
+                if (chosen-start).days>=30:st.error('This challenge began more than 30 days before the selected date. Choose a day within your 30-day window.')
+                else:
+                    set_challenge_day(owner,chosen.isoformat(),activity)
+                    st.session_state.activity_saved=(f"تم حفظ {activity} دقيقة ليوم {chosen:%d/%m/%Y}." if arabic()
+                                                      else f"Saved {activity} min for {chosen:%A}, {chosen.day} {chosen:%B}.")
+                    st.rerun()
         calendar(days,start,local_today())
         if status['completed']>=7:st.success('Achievement: 7 active days!')
         if status['completed']==30:st.balloons()
