@@ -41,10 +41,7 @@
 .calendar-day.incomplete {border-bottom:3px solid #C98F1E;}
 .calendar-day.today {outline:2px solid #0E9AA7;}
 .calendar-day.future {opacity:.65;}
-[data-testid="stMain"] [data-testid="stMetric"] {padding:18px!important;border-radius:17px;background:linear-gradient(130deg,color-mix(in srgb,#0E9AA7 8%,var(--ahead-card)),var(--ahead-card));border:2px solid #0E9AA7;}
-[data-testid="stMain"] [data-testid="stColumn"]:nth-child(2) [data-testid="stMetric"] {border-color:#14556B;}
-[data-testid="stMain"] [data-testid="stColumn"]:nth-child(3) [data-testid="stMetric"] {border-color:#5B8FA3;}
-[data-testid="stMain"] [data-testid="stColumn"]:nth-child(4) [data-testid="stMetric"] {border-color:#C98F1E;}
+[data-testid="stMain"] [data-testid="stMetric"] {padding:18px!important;border-radius:17px;background:linear-gradient(130deg,color-mix(in srgb,#0E9AA7 8%,var(--ahead-card)),var(--ahead-card));border:2px solid #C98F1E;}
 [data-testid="stPlotlyChart"] {border:1px solid var(--ahead-border);border-radius:20px;padding:8px;background:var(--ahead-card);box-shadow:0 4px 18px #102a5305;overflow:hidden;}
 [data-testid="stForm"] {background:var(--ahead-card);border:1px solid var(--ahead-border)!important;border-radius:22px!important;padding:24px!important;}
 [data-testid="stVerticalBlockBorderWrapper"] > div {border-radius:18px;}
