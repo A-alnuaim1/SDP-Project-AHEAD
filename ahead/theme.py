@@ -294,11 +294,11 @@ h1, h2, h3, h4, h5, h6 { color: var(--ahead-title); }
     margin-bottom: 16px; box-shadow: 0 8px 18px rgba(16,44,66,0.16);
 }
 .condition-icon img { width: 28px; height: 28px; }
-.condition-title { color: color-mix(in srgb, var(--condition) 50%, var(--ahead-title)); font-size: 1.05rem; font-weight: 720; margin: 0; letter-spacing: -0.01em; }
-.condition-copy { color: color-mix(in srgb, var(--condition) 25%, var(--ahead-muted)); font-size: 0.8rem; line-height: 1.6; margin: 8px 0 0; min-height: 3.2em; }
-.condition-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: auto; padding-top: 18px; font-size: 0.74rem; white-space: nowrap; }
-.condition-meta { color: color-mix(in srgb, var(--condition) 25%, var(--ahead-muted)); font-weight: 550; }
-.condition-go { margin-left: auto; color: color-mix(in srgb, var(--condition) 75%, var(--ahead-title)); font-weight: 700; transition: transform .2s ease; }
+.condition-title { color: color-mix(in srgb, var(--condition) 50%, var(--ahead-title)); font-size: 1.05rem; font-weight: 720; margin: 0; letter-spacing: -0.01em; overflow-wrap: anywhere; hyphens: auto; }
+.condition-copy { font-size: 0.8rem; line-height: 1.6; margin: 8px 0 0; min-height: 3.2em; }
+.condition-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: auto; padding-top: 18px; font-size: 0.74rem; }
+.condition-meta { color: color-mix(in srgb, var(--condition) 25%, var(--ahead-text)); font-weight: 550; }
+.condition-go { margin-left: auto; white-space: nowrap; color: color-mix(in srgb, var(--condition) 75%, var(--ahead-title)); font-weight: 700; transition: transform .2s ease; }
 [class*="_condition_card"]:hover .condition-go { transform: translateX(3px); }
 /* the real Streamlit button is stretched invisibly over the card, so the whole card is the click target */
 [class*="_condition_card"] [data-testid="stElementContainer"]:has(> .stButton) { position: absolute; inset: 0; z-index: 2; margin: 0 !important; }

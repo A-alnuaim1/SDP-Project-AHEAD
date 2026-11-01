@@ -64,7 +64,7 @@
 .summary-value small {font-size:.8rem;font-weight:600;color:var(--ahead-muted);}
 .summary-bar {height:6px;margin-top:8px;border-radius:6px;overflow:hidden;background:color-mix(in srgb,var(--tone) 16%,var(--ahead-card));}
 .summary-bar span {display:block;height:100%;border-radius:6px;background:var(--tone);}
-.summary-note {margin:8px 0 0;font-size:.74rem;line-height:1.45;color:var(--ahead-muted);}
+.summary-note {margin:8px 0 0;font-size:.74rem;line-height:1.45;}
 .summary-go {margin-top:auto;padding-top:14px;display:flex;justify-content:space-between;font-size:.76rem;font-weight:700;color:color-mix(in srgb,var(--tone) 75%,var(--ahead-title));}
 [class*="_summary_card"]:hover .summary-go span:last-child {transform:translateX(3px);}
 .summary-go span:last-child {transition:transform .2s ease;}
