@@ -14,7 +14,7 @@ MODELS_DIR = BASE / "models"
 ASSETS_DIR = BASE / "assets"
 ICONS_DIR = ASSETS_DIR / "icons"
 
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 # Light model: speech-to-text for voice questions, and the assistant's fallback when the main model is
 # overloaded or times out, so voice and chat stay responsive.
 GEMINI_FAST_MODEL = "gemini-3.5-flash-lite"
