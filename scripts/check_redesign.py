@@ -65,11 +65,11 @@ for account, role in [('patient', 'Patient'), ('doctor', 'Doctor / Admin')]:
 
 at = AppTest.from_file(os.path.abspath('app.py'), default_timeout=90)
 for key, value in {'authenticated': True, 'user': p, 'nav': 'intelligence',
-                   'appearance_mode': 'Dark', 'pref_language': 'العربية'}.items():
+                   'appearance_mode': 'Dark'}.items():
     at.session_state[key] = value
 at.run()
 assert not at.exception
 assert at.session_state.nav == 'overview'
 assert not any(b.key == 'nav_intelligence' for b in at.button)
-print('PASS patient restricted navigation and Arabic/dark render', flush=True)
+print('PASS patient restricted navigation and dark render', flush=True)
 print('SMOKE COMPLETE')

@@ -12,7 +12,6 @@ import streamlit as st
 from ahead.components import current_user, logout, pref, page_header
 from ahead.theme import APPEARANCE_OPTIONS, appearance_mode
 from ahead.storage import change_password, delete_records, delete_screenings, update_profile, update_preferences
-from ahead.i18n import tr
 from ahead.platform_data import doctors_for, grant_doctor, revoke_doctor, ai_consent
 
 
@@ -41,7 +40,6 @@ def _save_prefs() -> None:
     if user:
         update_preferences(user["id"], {
             "toggles": st.session_state.prefs,
-            "language": st.session_state.get("pref_language", "English"),
             "appearance": st.session_state.get("appearance_mode", "Light"),
         })
 
@@ -148,9 +146,6 @@ def _preferences_tab() -> None:
             st.toast("Screening history cleared.")
             st.rerun()
 
-    _panel("Language", "Choose the language for patient screening and navigation. Doctor tools and exported PDF remain in English.")
-    st.selectbox("Application language / لغة التطبيق", ["English", "العربية"],
-                 key="pref_language", on_change=_save_prefs)
     user=st.session_state.get('user') or {}
     if user.get('role')=='Patient':
         _panel('Care team access','You decide which doctor accounts may view your saved history and assign medication. You can revoke access at any time.')

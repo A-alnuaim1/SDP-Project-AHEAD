@@ -9,7 +9,6 @@ import streamlit as st
 from ahead.components import condition_cards, go_to, page_header, stepper
 from ahead.config import DISEASES
 from ahead.screening import render_predictor
-from ahead.i18n import tr
 
 
 def render_screenings() -> None:
@@ -24,7 +23,7 @@ def render_screenings() -> None:
         condition_cards("begin", button_label="Begin screening")
         return
 
-    if st.button(tr("← Back to all screenings"), key="back_to_screenings", type="tertiary"):
+    if st.button("← Back to all screenings", key="back_to_screenings", type="tertiary"):
         go_to("screenings")
 
     stepper_slot = st.empty()          # filled once we know whether a result is on screen

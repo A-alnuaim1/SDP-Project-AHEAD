@@ -7,7 +7,6 @@ AHEAD Insight (Gemini) and model interpretation.
 
 import re
 from html import escape
-from ahead.i18n import tr, arabic, AR_STEPS
 
 import numpy as np
 import pandas as pd
@@ -38,7 +37,7 @@ def _age_category_sort_key(value: str):
 def render_feature_input(stats: dict, feature: str, key: str):
     """One form widget for *feature*, built from the cached dataset statistics."""
     info = stats[feature]
-    label = tr(pretty_label(feature))
+    label = pretty_label(feature)
 
     if info["kind"] == "category":
         options = info["options"]
@@ -50,12 +49,12 @@ def render_feature_input(stats: dict, feature: str, key: str):
         return st.selectbox(label, options, index=default_index, key=key)
 
     if info["binary"] and feature in GENDER_CODED_FIELDS:
-        names = ("ذكر", "أنثى") if arabic() else ("Male", "Female")
+        names = ("Male", "Female")
         return st.selectbox(label, [0, 1], index=info["mode"] or 0,
                             format_func=lambda x: names[x], key=key)
 
     if info["binary"]:   # any other 0/1-coded column is a No/Yes choice
-        names = ("لا", "نعم") if arabic() else ("No", "Yes")
+        names = ("No", "Yes")
         return st.selectbox(label, [0, 1], index=info["mode"] or 0,
                             format_func=lambda x: names[x], key=key)
 
@@ -392,7 +391,7 @@ def render_predictor(disease: str) -> bool:
 
     page_header("AHEAD Clinical Screening", info["page_title"], info["page_subtitle"])
 
-    st.markdown("#### " + tr("Prediction model"))
+    st.markdown("#### Prediction model")
     pipeline, selected_name, threshold = model_selector(disease, key=f"{disease}_model_selector")
     if pipeline is None:
         st.error("No trained model is available. Run `python train_model.py` first.")
@@ -417,7 +416,7 @@ def render_predictor(disease: str) -> bool:
                 f"""
 <div class="form-section-title">
     <div class="form-section-number">{number}</div>
-    <div><h3>{escape(tr(section))}</h3><p>{escape(tr(GROUP_DESCRIPTIONS.get(section, "Other values used by the model.")))}</p></div>
+    <div><h3>{escape(section)}</h3><p>{escape(GROUP_DESCRIPTIONS.get(section, "Other values used by the model."))}</p></div>
 </div>
 """
             )
@@ -426,7 +425,7 @@ def render_predictor(disease: str) -> bool:
             for index, feature in enumerate(active):
                 with columns[index % 3]:
                     values[feature] = render_feature_input(stats, feature, f"{disease}_{feature}")
-        submitted = st.form_submit_button(tr("Generate Screening Result"), width="stretch", type="primary")
+        submitted = st.form_submit_button("Generate Screening Result", width="stretch", type="primary")
 
     # ------------------------------------------------------------------ compute / restore
     result = None
@@ -477,7 +476,7 @@ def render_predictor(disease: str) -> bool:
         "recall describes how many positive examples the model flagged. "
         "Performance for an individual or a different population can differ."
     )
-    st.download_button(tr("Download screening PDF"), patient_report(
+    st.download_button("Download screening PDF", patient_report(
         disease, "Session screening", values, probability, threshold, model_name, report_metrics,
         metric_source=source),
         file_name=f"ahead_{disease}_screening.pdf", mime="application/pdf")
@@ -486,7 +485,7 @@ def render_predictor(disease: str) -> bool:
     with recommendations_tab:
         # ------------------------------------------------------------------ next steps
         section_heading("Recommended Next Steps", "Practical actions to consider after this screening result.")
-        steps = AR_STEPS[disease][prediction] if arabic() else get_next_steps(disease, prediction)
+        steps = get_next_steps(disease, prediction)
         for index, (title, text) in enumerate(steps, start=1):
             st.html(
                 f"""
@@ -497,7 +496,7 @@ def render_predictor(disease: str) -> bool:
     </div>
     """
             )
-        st.link_button(tr("Find a nearby clinic (map search)"), "https://www.google.com/maps/search/hospital+near+me/")
+        st.link_button("Find a nearby clinic (map search)", "https://www.google.com/maps/search/hospital+near+me/")
 
     with factors_tab:
         # ------------------------------------------------------------------ risk factors

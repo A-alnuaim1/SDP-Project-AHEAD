@@ -38,7 +38,7 @@ explanation.
 | **Data & Analytics** | Dataset explorer, final test metrics, threshold sweep (heart), algorithm comparison table |
 | **Clinical Dashboard** *(doctors)* | Review CSV/XLSX rows for missing/invalid values, derive age from DOB, correct incomplete records, score a cohort, record clinician decisions, and download CSV/PDF summaries |
 | **AI Assistant** | "Ask AHEAD" chat with suggested prompts; answers via Gemini (offline answers for the suggestions) |
-| **Settings** | Persistent profile/password, Light/Dark appearance, English/partial Arabic patient labels, session history controls and account actions |
+| **Settings** | Persistent profile/password, Light/Dark appearance, session history controls and account actions |
 
 ### Patient wellness and linked care (experimental)
 
@@ -89,7 +89,6 @@ SDP-Project-AHEAD/
 │   ├── clinical_data.py    ← row-by-row upload validation and DOB calculation
 │   ├── storage.py          ← local SQLite accounts and doctor review queue
 │   ├── reports.py          ← downloadable individual screening PDFs
-│   ├── i18n.py             ← patient-facing Arabic labels
 │   ├── theme.py            ← colour tokens (light & dark), global CSS, Plotly styling
 │   ├── components.py       ← shared UI pieces + session-state helpers
 │   ├── screening.py        ← the guided screening flow (form → prediction → guidance)
@@ -151,7 +150,7 @@ Demo accounts are disabled by default. Set `AHEAD_ENABLE_DEMO_ACCOUNTS=1` **only
 
 Clinical uploads require model feature columns except age. An optional `DOB`, `DateOfBirth`, `date_of_birth`, or `Date of Birth` column (YYYY-MM-DD) fills age or the heart model's age category. Missing and invalid values appear per row and are not scored until corrected. Correct a row and save it in the review queue, then score eligible records. Clinicians can mark a record reviewed or excluded and add a note. The file is limited to 5,000 rows and 15 MB. The PDF and CSV contain entered data; handle downloads appropriately.
 
-Arabic currently covers navigation, key patient-screening controls, several input labels and the result summary. Long-form guidance, doctor tools and the generated PDF remain English; full translation and right-to-left layout are future work. No email, text or push notifications are sent. The map-search link does not show live appointment availability.
+The app is English only. No email, text or push notifications are sent. The map-search link does not show live appointment availability.
 
 ---
 

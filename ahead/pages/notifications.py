@@ -2,7 +2,6 @@
 import streamlit as st
 from datetime import timedelta
 from ahead.components import go_to,page_header
-from ahead.i18n import tr
 from ahead.visuals import metric
 from ahead.platform_data import mark_notification,notifications,lifestyle_history,get_goals,challenge_days,notify,local_today
 from ahead.pages.medications import refresh_medication_notifications
@@ -24,9 +23,9 @@ def render_notifications():
             st.write(('🔵 ' if not row['read_at'] else '')+f"**{row['title']}** · {row['created_at'][:16]}")
             st.caption(row['description'])
             c1,c2=st.columns(2)
-            if not row['read_at'] and c1.button(tr('Mark as read'),key=f"read_{row['id']}"):
+            if not row['read_at'] and c1.button('Mark as read',key=f"read_{row['id']}"):
                 mark_notification(owner,row['id']);st.rerun()
-            if row['action'] and c2.button(tr('Open'),key=f"open_{row['id']}"):
+            if row['action'] and c2.button('Open',key=f"open_{row['id']}"):
                 mark_notification(owner,row['id']);go_to(row['action'])
 
 

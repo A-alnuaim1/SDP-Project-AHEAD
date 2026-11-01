@@ -37,7 +37,6 @@ from ahead.pages.screenings import render_screenings  # noqa: E402
 from ahead.pages.settings import render_settings  # noqa: E402
 from ahead.theme import apply_theme, inject_app_css, inject_global_css, sidebar_dynamic_css  # noqa: E402
 from ahead.storage import init_db  # noqa: E402
-from ahead.i18n import tr  # noqa: E402
 from ahead.platform_data import init_platform, notifications  # noqa: E402
 from ahead.pages.wellness import render_wellness  # noqa: E402
 from ahead.pages.food import render_food  # noqa: E402
@@ -74,8 +73,6 @@ if "page" in st.query_params:
 apply_theme()
 inject_app_css()
 user = current_user()
-if st.session_state.get('pref_language')=='العربية':
-    st.html('<style>[data-testid="stMainBlockContainer"], [data-testid="stSidebarContent"] {direction:rtl;text-align:right;} input,textarea {text-align:right;} [data-testid="stHorizontalBlock"] {direction:rtl;}</style>')
 
 # =============================================================================
 # SIDEBAR
@@ -114,9 +111,9 @@ with st.sidebar:
                      'My health' if key in ('wellness','food','medications') else
                      'Support & account' if key in ('notifications','assistant','settings') else 'Workspace')
             if group != previous_group:
-                st.html(f'<div class="sidebar-section-label">{tr(group)}</div>')
+                st.html(f'<div class="sidebar-section-label">{group}</div>')
                 previous_group = group
-            text = tr(label) + (f" ({unread})" if key == "notifications" and unread else "")
+            text = label + (f" ({unread})" if key == "notifications" and unread else "")
             if st.button(text, key=f"nav_{key}", width="stretch"):
                 if key == "assistant":
                     open_assistant(active)
@@ -136,7 +133,7 @@ with st.sidebar:
 </div>
 """
         )
-        if st.button(tr("Log Out"), key="sidebar_logout", width="stretch"):
+        if st.button("Log Out", key="sidebar_logout", width="stretch"):
             logout()
 
 # =============================================================================
@@ -145,7 +142,7 @@ with st.sidebar:
 
 if active != "assistant":
     with st.container(key="open_assistant"):
-        if st.button(tr("Open AHEAD Assistant"), key="open_assistant_button"):
+        if st.button("Open AHEAD Assistant", key="open_assistant_button"):
             open_assistant(active)
 
 # =============================================================================

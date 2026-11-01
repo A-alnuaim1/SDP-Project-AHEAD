@@ -5,7 +5,6 @@ import pandas as pd
 import streamlit as st
 
 from ahead.components import page_header
-from ahead.i18n import tr
 from ahead.visuals import metric,adherence_chart
 from ahead.platform_data import dose_entries,mark_dose,notify,plans,scheduled_doses,local_today
 
@@ -31,7 +30,7 @@ def render_medications():
     cols=st.columns(3)
     for col,args in zip(cols,[('Active plans',sum(p['status']=='active' for p in active),'Assigned by your doctor','#2563EB'),('Scheduled today',len(today_doses),'Your daily care routine','#8B5CF6'),('Logged taken',sum(d['status']=='taken' for d in today_doses),'Today’s recorded doses','#10B981')]):
         with col:metric(*args)
-    tab1,tab2,tab3=st.tabs([tr('Today'),tr('Plans'),tr('Adherence history')])
+    tab1,tab2,tab3=st.tabs(['Today','Plans','Adherence history'])
     with tab1:
         doses=scheduled_doses(owner,today,today)
         if not doses:st.info('No active medication doses scheduled today.')
@@ -40,10 +39,10 @@ def render_medications():
                 st.write(f"**{d['name']} · {d['dosage']}**  — {d['time']}  · {d['status'].title()}")
                 st.caption(d['instructions'])
                 c1,c2=st.columns(2)
-                if c1.button(tr('Taken'),key=f"taken_{d['plan_id']}_{d['time']}"):
+                if c1.button('Taken',key=f"taken_{d['plan_id']}_{d['time']}"):
                     try:mark_dose(owner,d['plan_id'],d['date'],d['time'],'taken');st.rerun()
                     except (ValueError,PermissionError) as error:st.error(str(error))
-                if c2.button(tr('Skipped'),key=f"skipped_{d['plan_id']}_{d['time']}"):
+                if c2.button('Skipped',key=f"skipped_{d['plan_id']}_{d['time']}"):
                     try:mark_dose(owner,d['plan_id'],d['date'],d['time'],'skipped');st.rerun()
                     except (ValueError,PermissionError) as error:st.error(str(error))
         st.caption('A due dose appears in the in-app notification center. External push, email and SMS reminders are not configured.')

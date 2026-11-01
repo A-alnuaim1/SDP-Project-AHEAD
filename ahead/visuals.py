@@ -6,7 +6,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from ahead.i18n import tr
 from ahead.theme import style_figure, show_chart
 
 COLORS = {'Nutrition':'#2E9477','Activity':'#0E9AA7','Sleep':'#14556B','Hydration':'#5B8FA3','Habits':'#C98F1E'}
@@ -26,25 +25,25 @@ def score_ring(value, label, status=None, color=None, note=''):
     <svg viewBox="0 0 160 160" aria-hidden="true"><circle class="ring-track" cx="80" cy="80" r="68"/>
     <circle class="ring-value" cx="80" cy="80" r="68" pathLength="100" style="--ring-offset:{100-value};stroke-dashoffset:{100-value}"/></svg>
     <div class="ring-center"><strong>{value:.0f}<small>/100</small></strong></div></div>
-    <h3>{escape(tr(label))}</h3><span class="visual-badge">{escape(tr(status))}</span><p>{escape(note)}</p></div>''')
+    <h3>{escape(label)}</h3><span class="visual-badge">{escape(status)}</span><p>{escape(note)}</p></div>''')
 
 def metric(label, value, note='', color='#0E9AA7', icon='✦'):
     st.html(f'''<div class="visual-metric" style="--visual-color:{color}"><span class="visual-icon" aria-hidden="true">{escape(icon)}</span>
-    <span class="visual-label">{escape(tr(label))}</span><strong>{escape(str(value))}</strong><small>{escape(note)}</small></div>''')
+    <span class="visual-label">{escape(label)}</span><strong>{escape(str(value))}</strong><small>{escape(note)}</small></div>''')
 
 def progress_card(label, amount, target, unit='', color='#0E9AA7'):
     percentage = min(100, max(0, amount / target * 100)) if target else 0
     status = 'Target reached' if percentage >= 100 else 'In progress'
-    st.html(f'''<div class="goal-card" style="--visual-color:{color}"><span class="visual-label">{escape(tr(label))}</span>
+    st.html(f'''<div class="goal-card" style="--visual-color:{color}"><span class="visual-label">{escape(label)}</span>
     <strong>{amount:g} <small>/ {target:g} {escape(unit)}</small></strong>
     <div class="visual-track" role="progressbar" aria-valuenow="{percentage:.0f}" aria-valuemin="0" aria-valuemax="100" aria-label="{escape(label)}"><span style="width:{percentage}%"></span></div>
-    <small>{percentage:.0f}% · {escape(tr(status))}</small></div>''')
+    <small>{percentage:.0f}% · {escape(status)}</small></div>''')
 
 def category_cards(result):
     for col, (name, value) in zip(st.columns(5), result['categories'].items()):
         with col:
             metric(name, f'{value}/100', wellness_status(value)[1], COLORS[name], {'Nutrition':'◈','Activity':'↗','Sleep':'☾','Hydration':'◉','Habits':'✦'}[name])
-            with st.expander(tr('Why this score?')): st.write(result['explanations'][name])
+            with st.expander('Why this score?'): st.write(result['explanations'][name])
 
 def category_chart(categories):
     df=pd.DataFrame({'Category':list(categories),'Score':list(categories.values())})

@@ -78,7 +78,6 @@ def _sign_in(email: str, password: str, account_type: str) -> str | None:
     if wanted == ROLE_PATIENT:
         event(account['id'],'login')
     st.session_state.prefs = {**st.session_state.prefs, **account.get("preferences", {}).get("toggles", {})}
-    st.session_state.pref_language = account.get("preferences", {}).get("language", "English")
     st.session_state.appearance_mode = account.get("preferences", {}).get("appearance", "Light")
     st.session_state.screening_history = [
         {"time": datetime.fromisoformat(item["created_at"]), "disease": item["disease"],

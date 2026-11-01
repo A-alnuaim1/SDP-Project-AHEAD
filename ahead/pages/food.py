@@ -6,7 +6,6 @@ import pandas as pd
 import streamlit as st
 
 from ahead.components import page_header
-from ahead.i18n import tr
 from ahead.platform_data import food_history,save_food
 from ahead.resources import gemini_api_key,gemini_interaction,gemini_error_message
 from ahead.visuals import metric,macros
@@ -36,12 +35,12 @@ def render_food():
     owner=st.session_state.user['id']
     page_header('Patient nutrition','Food Nutrition Analyzer','Review and confirm meal entries for your food history.')
     st.info('Photo analysis requires a configured Gemini vision API. All nutrients are rough estimates; photos cannot reveal exact ingredients or portion weights. Images are not stored in AHEAD.')
-    uploaded=st.file_uploader(tr('Upload or take a food photo'),type=['jpg','jpeg','png','webp'],key='meal_photo')
+    uploaded=st.file_uploader('Upload or take a food photo',type=['jpg','jpeg','png','webp'],key='meal_photo')
     if uploaded:
         if uploaded.size>8*1024*1024:st.error('Photo exceeds 8 MB.');return
         st.image(uploaded,width=400)
         if not gemini_api_key():st.warning('Image analysis is unavailable on this deployment. Use manual entry below; no AI estimate will be shown.')
-        elif st.button(tr('Analyze Food'),type='primary'):
+        elif st.button('Analyze Food',type='primary'):
             with st.spinner('Analyzing the photo with Gemini…'):
                 try:
                     result=analyze_photo(uploaded.getvalue(),uploaded.type)
@@ -56,16 +55,16 @@ def render_food():
         if result.get('summary'):st.info(str(result['summary']))
         if result.get('uncertainty'):st.warning(str(result['uncertainty']))
     with st.form('confirm_meal'):
-        foods=st.text_input(tr('Foods (comma separated)'),value=', '.join(map(str,result.get('foods',[]))))
-        portion=st.text_input(tr('Portion description'),value=str(result.get('portion') or ''))
+        foods=st.text_input('Foods (comma separated)',value=', '.join(map(str,result.get('foods',[]))))
+        portion=st.text_input('Portion description',value=str(result.get('portion') or ''))
         estimates={}
         cols=st.columns(4)
         for i,(field,unit) in enumerate(FIELDS.items()):
             value=result.get(field)
             try:value=max(0.0,float(value))
             except (ValueError,TypeError):value=0.0
-            estimates[field]=cols[i%4].number_input(tr(field.title())+f' ({unit})',min_value=0.0,max_value=100000.0,value=value)
-        submitted=st.form_submit_button(tr('Confirm and save meal'))
+            estimates[field]=cols[i%4].number_input(field.title()+f' ({unit})',min_value=0.0,max_value=100000.0,value=value)
+        submitted=st.form_submit_button('Confirm and save meal')
     if submitted:
         selected=[x.strip() for x in foods.split(',') if x.strip()]
         if not selected or not portion.strip():st.error('Enter foods and a portion before saving.')
@@ -90,7 +89,7 @@ def render_food():
         for i,(field,unit) in enumerate(FIELDS.items()):
             with cols[i%4]:metric(field.title(),f"{latest.get(field,0):g} {unit}",'Confirmed estimate',colors[i])
         macros(latest)
-    st.subheader(tr('Meal history'))
+    st.subheader('Meal history')
     if not records:st.info('No confirmed meals yet.')
     else:
         st.dataframe(pd.DataFrame([{'Date':r['created_at'][:16],'Foods':', '.join(r['foods']),

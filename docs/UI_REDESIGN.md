@@ -17,13 +17,13 @@ The existing application combines Doctor/Admin access. This update does not inve
 
 ## Interaction and accessibility
 
-Hover elevation, pressed-button feedback, animated rings/progress bars, expandable score explanations, result tabs, chart tooltips, dashboard navigation actions and notification filtering are implemented. CSS provides visible keyboard focus, labeled status indicators, mobile wrapping, logical border directions and reduced-motion handling. Existing Arabic RTL behavior is retained and new core navigation/status labels are translated. Some new chart titles and descriptive text remain English; this is not a complete localization overhaul.
+Hover elevation, pressed-button feedback, animated rings/progress bars, expandable score explanations, result tabs, chart tooltips, dashboard navigation actions and notification filtering are implemented. CSS provides visible keyboard focus, labeled status indicators, mobile wrapping, logical border directions and reduced-motion handling.
 
 ## Files
 
 New reusable UI: `ahead/visuals.py`, `ahead/redesign.css`, `ahead/pages/patient_dashboard.py`.
 
-Updated shared shell: `app.py`, `ahead/theme.py`, `ahead/i18n.py`, `login.css`.
+Updated shared shell: `app.py`, `ahead/theme.py`, `login.css`.
 
 Updated result view: `ahead/screening.py`.
 
@@ -38,7 +38,7 @@ Verification and documentation: `scripts/check_redesign.py`, `docs/UI_REDESIGN.m
 - Actual patient and doctor sign-in form submissions passed.
 - Lifestyle form submission persisted a new check-in.
 - Patient navigation to the doctor intelligence page was redirected to the permitted overview; restricted navigation was absent.
-- Arabic/dark-mode page render completed without exception. This is a render check, not a visual/accessibility audit.
+- Dark-mode page render completed without exception. This is a render check, not a visual/accessibility audit.
 - Original diabetes, heart and kidney pipelines all executed and their redesigned result pages rendered without exception.
 - Python compilation and Git whitespace checks passed.
 - Streamlit server started successfully in the test environment.
@@ -79,7 +79,7 @@ The smoke script creates test users and sample records only inside a temporary d
 3. Visit lifestyle history, goals and the challenge calendar; verify tooltips and values against stored records.
 4. Review a confirmed meal and its gram-based donut; check medication and notification pages.
 5. Sign in as Doctor/Admin; inspect linked-patient analytics, disease filters, patient history and clinical review.
-6. Check English/Arabic, Light/Dark, keyboard navigation, reduced-motion preference and narrow/mobile widths in a real browser.
+6. Check Light/Dark, keyboard navigation, reduced-motion preference and narrow/mobile widths in a real browser.
 
 Deploy only from `codex/clinical-workflow-upgrade` after these changed files are committed and pushed there. A local code change or a Streamlit reboot alone does not publish files to GitHub. Do not merge into `main` for this update.
 
