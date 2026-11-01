@@ -14,7 +14,7 @@ def refresh_medication_notifications(patient_id):
     today=local_today()
     for dose in scheduled_doses(patient_id,today-timedelta(days=1),today):
         if dose['status'] in ('upcoming','missed'):
-            kind='medication_due' if dose['date']==today else 'medication_missed'
+            kind='medication_due' if dose['date']==today.isoformat() else 'medication_missed'
             notify(patient_id,kind,'Medication '+('due' if kind=='medication_due' else 'missed'),
                    f"{dose['name']} · {dose['dosage']} · {dose['date']} {dose['time']}",'medications',
                    f"{kind}-{dose['plan_id']}-{dose['date']}-{dose['time']}")

@@ -534,6 +534,9 @@ DARK_NATIVE_OVERRIDES = """
 [data-testid="stMain"] code { background: var(--ahead-soft) !important; color: var(--ahead-accent) !important; }
 [data-testid="stMain"] [data-testid="stExpander"] > details { background: var(--ahead-card) !important; border-color: var(--ahead-border) !important; }
 [data-testid="stMain"] [data-testid="stExpander"] summary, [data-testid="stMain"] [data-testid="stExpander"] summary * { color: var(--ahead-title) !important; }
+/* Streamlit paints an open/hovered summary with the light theme's background; keep it dark so the title stays readable */
+[data-testid="stMain"] [data-testid="stExpander"] summary { background: var(--ahead-card) !important; }
+[data-testid="stMain"] [data-testid="stExpander"] summary:hover { background: var(--ahead-soft) !important; }
 [data-testid="stMain"] button [data-testid="stMarkdownContainer"], [data-testid="stMain"] button p { color: inherit !important; }
 </style>
 """

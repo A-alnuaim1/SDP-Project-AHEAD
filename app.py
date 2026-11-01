@@ -99,16 +99,14 @@ with st.sidebar:
     </div>
 </div>
 <div class="sidebar-divider"></div>
-<div class="sidebar-section-label">Menu</div>
 """
     )
 
     with st.container(key="sidebar_nav"):
+        unread = 0
         if not user['is_doctor']:
             refresh_patient_notifications(st.session_state.user['id'])
             unread=sum(not n['read_at'] for n in notifications(st.session_state.user['id']))
-            if st.button(f"🔔 {tr('Notifications')} ({unread})",key='notification_badge',width='stretch'):
-                go_to('notifications')
         previous_group = None
         for key, label, _icon, _doctor_only in visible_nav:
             group = ('Care & insights' if key in ('clinical','intelligence','analytics') else
@@ -117,7 +115,8 @@ with st.sidebar:
             if group != previous_group:
                 st.html(f'<div class="sidebar-section-label">{tr(group)}</div>')
                 previous_group = group
-            if st.button(tr(label), key=f"nav_{key}", width="stretch"):
+            text = tr(label) + (f" ({unread})" if key == "notifications" and unread else "")
+            if st.button(text, key=f"nav_{key}", width="stretch"):
                 if key == "assistant":
                     open_assistant(active)
                 go_to(key)

@@ -179,16 +179,18 @@ def pretty_label(feature: str) -> str:
 
 NAV_ITEMS = [
     # key,        label,               icon file,       doctor-only
+    # Kept in sidebar-group order (Workspace, My health, Care & insights, Support & account)
+    # so every group heading appears once.
     ("overview",  "Overview",          "home.svg",      False),
     ("screenings", "Screenings",       "screenings.svg", False),
-    ("wellness", "Health & Lifestyle Tracker", "analytics.svg", False),
-    ("food", "Food Nutrition Analyzer", "screenings.svg", False),
-    ("medications", "Medication Monitoring", "clinical.svg", False),
-    ("notifications", "Notifications", "settings.svg", False),
-    ("voice", "Voice Assistant", "assistant.svg", False),
+    ("wellness", "Health & Lifestyle Tracker", "wellness.svg", False),
+    ("food", "Food Nutrition Analyzer", "food.svg", False),
+    ("medications", "Medication Monitoring", "medications.svg", False),
     ("analytics", "Data & Analytics",  "analytics.svg", False),
     ("clinical",  "Clinical Dashboard", "clinical.svg", True),
-    ("intelligence", "Advanced Analytics & Patient Intelligence", "analytics.svg", True),
+    ("intelligence", "Advanced Analytics & Patient Intelligence", "intelligence.svg", True),
+    ("notifications", "Notifications", "notifications.svg", False),
+    ("voice", "Voice Assistant", "voice.svg", False),
     ("assistant", "AI Assistant",      "assistant.svg", False),
     ("settings",  "Settings",          "settings.svg",  False),
 ]

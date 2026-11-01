@@ -12,7 +12,7 @@ import streamlit as st
 
 from ahead.config import BASE, ROLE_DOCTOR, ROLE_PATIENT
 from ahead.resources import icon_uri, static_url
-from ahead.storage import authenticate, create_user, load_screenings
+from ahead.storage import authenticate, create_user, ephemeral_storage, has_doctor_account, load_screenings
 from ahead.config import DISEASES
 from datetime import datetime
 from ahead.platform_data import event
@@ -155,6 +155,17 @@ def render_login() -> None:
                         st.query_params.clear()
                         st.rerun()
 
+                if account_type != "Patient" and not has_doctor_account():
+                    st.html(
+                        '<div class="login-note">No doctor account is set up on this deployment yet. '
+                        'Doctor / Admin access is created by the project team.</div>'
+                    )
+                if ephemeral_storage():
+                    st.html(
+                        '<div class="login-note">This is a hosted demo: accounts and saved records are reset '
+                        'whenever the app restarts. Use fictional data only.</div>'
+                    )
+
                 with st.expander("Create a patient account"):
                     with st.form("patient_registration"):
                         name = st.text_input("Your full name")
@@ -219,8 +230,10 @@ PUBLIC_CONTENT = {
         "title": "How to use AHEAD",
         "intro": "A short guide to signing in, running a screening and reading the result.",
         "cards": [
-            ("1", "Sign in", ["Choose Patient or Doctor / Admin, then use one of the demo accounts listed under "
-                             "\"Demo accounts\" on the sign-in card. No real patient data is stored."]),
+            ("1", "Sign in", ["Patients can register with \"Create a patient account\" on the sign-in card, then "
+                             "sign in with Patient selected. Doctor / Admin accounts are set up by the project team.",
+                             "Your screenings, lifestyle check-ins and medication records are saved to your account. "
+                             "On the hosted demo they are reset whenever the app restarts, so use fictional data only."]),
             ("2", "Run a screening", ["Open Screenings, pick a condition and complete the three sections of the form. "
                                      "AHEAD scores the answers with the recommended model (you can compare alternatives)."]),
             ("3", "Read the result", ["The gauge shows the model score against its decision threshold. Below it you will find "

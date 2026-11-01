@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -85,7 +86,28 @@ def init_db():
     doctor_email = os.environ.get("AHEAD_DOCTOR_EMAIL")
     doctor_password = os.environ.get("AHEAD_DOCTOR_PASSWORD")
     if doctor_email and doctor_password:
-        create_user(doctor_email, doctor_password, ROLE_DOCTOR, "Doctor")
+        try:
+            create_user(doctor_email, doctor_password, ROLE_DOCTOR, "Doctor")
+        except ValueError:
+            # A misconfigured secret must not take the whole site down (including sign-in).
+            logging.getLogger(__name__).warning(
+                "AHEAD_DOCTOR_PASSWORD is shorter than 12 characters; the doctor account was not created.")
+
+
+def has_doctor_account():
+    with connection() as db:
+        return db.execute("SELECT 1 FROM users WHERE role=? LIMIT 1", (ROLE_DOCTOR,)).fetchone() is not None
+
+
+def ephemeral_storage():
+    """True when the database sits on a disk that is wiped on restart (Streamlit Community Cloud).
+
+    Community Cloud clones the repository under /mount/src; AHEAD_EPHEMERAL_STORAGE=1/0 overrides the guess.
+    """
+    override = os.environ.get("AHEAD_EPHEMERAL_STORAGE")
+    if override in ("0", "1"):
+        return override == "1"
+    return str(_db_path().resolve()).startswith("/mount/src/")
 
 
 def create_user(email, password, role, name, institution="", demo=False):

@@ -205,3 +205,9 @@
 .login-topbar a.active {color:#2563EB!important;}
 @media (max-width:700px) {.st-key-login_shell [data-testid="stHorizontalBlock"]{flex-wrap:wrap!important;} .st-key-login_shell [data-testid="stColumn"]{min-width:100%!important;} }
 @media (prefers-reduced-motion:reduce) {* {transition:none!important;animation:none!important;}}
+
+/* informational notes under the sign-in form */
+.login-note {
+    margin-top: 10px; padding: 10px 12px; border-radius: 12px; font-size: 0.78rem; line-height: 1.5;
+    color: #31506B; background: #EEF6FA; border: 1px solid #D6E6EE;
+}
