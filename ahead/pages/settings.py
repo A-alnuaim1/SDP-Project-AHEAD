@@ -128,7 +128,6 @@ def _appearance_tab() -> None:
                 st.session_state.appearance_mode = mode
                 _save_prefs()
                 st.rerun()
-    st.caption("The display mode applies to this browser session and switches charts and every AHEAD element immediately.")
 
 
 def _preferences_tab() -> None:
