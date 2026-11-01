@@ -564,7 +564,11 @@ def _token_block(t: dict) -> str:
 
 def inject_global_css() -> None:
     st.html(GLOBAL_CSS)
-    st.html("<style>" + (Path(__file__).with_name("redesign.css")).read_text() + "</style>")
+
+
+def inject_app_css() -> None:
+    """Signed-in visual layer (redesign.css). Kept off the public pages, which are styled by login.css."""
+    st.html("<style>" + (Path(__file__).with_name("redesign.css")).read_text(encoding="utf-8") + "</style>")
 
 
 def apply_theme(force_light: bool = False) -> None:

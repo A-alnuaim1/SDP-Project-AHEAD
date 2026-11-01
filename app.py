@@ -34,7 +34,7 @@ from ahead.pages.overview import render_overview  # noqa: E402
 from ahead.pages.public import PUBLIC_CONTENT, render_login, render_public_page  # noqa: E402
 from ahead.pages.screenings import render_screenings  # noqa: E402
 from ahead.pages.settings import render_settings  # noqa: E402
-from ahead.theme import apply_theme, inject_global_css, sidebar_dynamic_css  # noqa: E402
+from ahead.theme import apply_theme, inject_app_css, inject_global_css, sidebar_dynamic_css  # noqa: E402
 from ahead.storage import init_db  # noqa: E402
 from ahead.i18n import tr  # noqa: E402
 from ahead.platform_data import init_platform, notifications  # noqa: E402
@@ -71,6 +71,7 @@ if "page" in st.query_params:
     st.query_params.clear()
 
 apply_theme()
+inject_app_css()
 user = current_user()
 if st.session_state.get('pref_language')=='العربية':
     st.html('<style>[data-testid="stMainBlockContainer"], [data-testid="stSidebarContent"] {direction:rtl;text-align:right;} input,textarea {text-align:right;} [data-testid="stHorizontalBlock"] {direction:rtl;}</style>')
