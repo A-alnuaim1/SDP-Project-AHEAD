@@ -475,6 +475,16 @@ h1, h2, h3, h4, h5, h6 { color: var(--ahead-title); }
 [data-testid="stMain"] [data-testid="stMetricValue"] { color: var(--ahead-title); font-size: 1.45rem; }
 [data-testid="stMain"] hr { border-color: var(--ahead-border); }
 [data-testid="stMain"] [data-testid="stAlert"] { border-radius: 12px; }
+/* info boxes: teal tint with an info icon (warnings and errors keep Streamlit's amber/red) */
+[data-testid="stMain"] [data-testid="stAlertContainer"]:has(> [data-testid="stAlertContentInfo"]) {
+    background: var(--ahead-accent-soft) !important; color: #0B5F68 !important;
+    border: 1px solid color-mix(in srgb, var(--ahead-accent) 22%, transparent) !important;
+}
+[data-testid="stMain"] [data-testid="stAlertContentInfo"] { display: flex; gap: 10px; align-items: flex-start; color: inherit !important; }
+[data-testid="stMain"] [data-testid="stAlertContentInfo"]::before {
+    content: ""; flex: none; width: 18px; height: 18px; margin-top: 2px; background-color: var(--ahead-accent);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27black%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Ccircle%20cx%3D%2712%27%20cy%3D%2712%27%20r%3D%279%27%2F%3E%3Cpath%20d%3D%27M12%208h.01%27%2F%3E%3Cpath%20d%3D%27M11%2012h1v4h1%27%2F%3E%3C%2Fsvg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27black%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Ccircle%20cx%3D%2712%27%20cy%3D%2712%27%20r%3D%279%27%2F%3E%3Cpath%20d%3D%27M12%208h.01%27%2F%3E%3Cpath%20d%3D%27M11%2012h1v4h1%27%2F%3E%3C%2Fsvg%3E") center / contain no-repeat;
+}
 /* popover menu (Start Screening): light list with dividers and a chevron on each row */
 [data-testid="stPopoverBody"] {
     border-radius: 14px; min-width: 300px; padding: 6px 8px !important;
@@ -523,6 +533,10 @@ DARK_NATIVE_OVERRIDES = """
 [data-testid="stMain"] [data-testid="stAlertContainer"] [data-testid^="stAlertContent"], [data-testid="stMain"] [data-testid="stAlertContainer"] p,
 [data-testid="stMain"] [data-testid="stAlertContainer"] svg { color: var(--ahead-text) !important; }
 [data-testid="stMain"] [data-testid="stAlertContainer"] code { background: var(--ahead-card) !important; color: var(--ahead-accent) !important; }
+[data-testid="stMain"] [data-testid="stAlertContainer"]:has(> [data-testid="stAlertContentInfo"]) {
+    background: color-mix(in srgb, var(--ahead-accent) 14%, var(--ahead-card)) !important; color: var(--ahead-text) !important;
+    border-color: color-mix(in srgb, var(--ahead-accent) 32%, transparent) !important;
+}
 [data-testid="stMain"] [data-testid="stFileUploader"] section { background: var(--ahead-soft) !important; border-color: var(--ahead-border) !important; }
 [data-testid="stMain"] [data-testid="stFileUploader"] * { color: var(--ahead-text); }
 [data-testid="stPopoverBody"] { background: var(--ahead-card) !important; border-color: var(--ahead-border) !important; }
