@@ -64,7 +64,7 @@ AR.update({
     'Save goals':'حفظ الأهداف','Goals saved.':'تم حفظ الأهداف.',
     'Activity date':'تاريخ النشاط','Save activity':'حفظ النشاط',
     'Move for at least 30 minutes a day, 30 days in a row.':'تحرّك ٣٠ دقيقة على الأقل يومياً لمدة ٣٠ يوماً متتالية.',
-    'Walking, cycling, sports and anything else that gets you moving all count. Log your minutes each day: every day you reach 30 minutes is marked complete on the calendar and adds to your streak.':'المشي وركوب الدراجة والرياضة وأي نشاط يحرّكك كلها تُحتسب. سجّل دقائقك كل يوم: كل يوم تصل فيه إلى ٣٠ دقيقة يُعلَّم كمكتمل في التقويم ويُضاف إلى سلسلتك.',
+    'Walking, cycling, sports or anything else that gets you moving counts. Log your minutes each day: every day you reach 30 minutes is marked complete on the calendar and adds to your streak.':'المشي أو ركوب الدراجة أو الرياضة أو أي نشاط يحرّكك يُحتسب. سجّل دقائقك كل يوم: كل يوم تصل فيه إلى ٣٠ دقيقة يُعلَّم كمكتمل في التقويم ويُضاف إلى سلسلتك.',
     'Upload or take a food photo':'ارفع أو التقط صورة للطعام','Analyze Food':'حلّل الطعام',
     'Foods (comma separated)':'الأطعمة (مفصولة بفواصل)','Portion description':'وصف الحصة',
     'Calories':'السعرات','Protein':'البروتين','Carbs':'الكربوهيدرات','Fat':'الدهون',
