@@ -58,6 +58,9 @@
 button[kind="primary"],button[kind="primaryFormSubmit"] {background:linear-gradient(135deg,#18BCC6,#12A5AF)!important;border:0!important;color:white!important;}
 button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible {outline:3px solid #14BFC0!important;outline-offset:3px;}
 [data-testid="stNumberInputContainer"]:focus-within,[data-testid="stTextInputRootElement"]:focus-within {box-shadow:0 0 0 3px #0E9AA722!important;border-color:#0E9AA7!important;}
+[data-testid="stNumberInputContainer"] input:focus-visible,[data-testid="stTextInputRootElement"] input:focus-visible {outline:none!important;}
+[data-testid="stNumberInputContainer"] [data-testid="stNumberInputStepDown"],[data-testid="stNumberInputContainer"] [data-testid="stNumberInputStepUp"] {border-left:1px solid var(--ahead-border)!important;border-radius:0!important;min-height:0!important;height:100%;}
+[data-testid="stNumberInputContainer"]:focus-within [data-testid="stNumberInputStepDown"],[data-testid="stNumberInputContainer"]:focus-within [data-testid="stNumberInputStepUp"] {border-left-color:#0E9AA766!important;}
 [data-testid="stFileUploader"] section {border:2px dashed #14556B!important;border-radius:18px!important;background:color-mix(in srgb,#14556B 5%,var(--ahead-card))!important;}
 [data-testid="stImage"] img {border-radius:20px;}
 [data-testid="stMain"] [role="tablist"] {gap:8px!important;padding:2px 0 6px!important;height:auto!important;background:transparent!important;border:none!important;overflow-x:auto!important;}
