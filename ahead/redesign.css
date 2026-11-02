@@ -72,6 +72,56 @@
 [class*="_summary_card"] .stButton,[class*="_summary_card"] .stButton button {width:100%!important;height:100%!important;}
 [class*="_summary_card"] .stButton button {opacity:0;cursor:pointer;}
 /* home "This week" strip */
+.st-key-food_day {container:food-day / inline-size;background:linear-gradient(130deg,color-mix(in srgb,#0E9AA7 8%,var(--ahead-card)),var(--ahead-card));border:2px solid #C98F1E;border-radius:17px;padding:18px 20px!important;gap:16px!important;}
+/* arrows stay either side of the date; on narrow cards "Pick a day" drops to its own line instead */
+.st-key-food_day .st-key-food_day_nav {flex-wrap:nowrap!important;}
+.st-key-food_day [data-testid="stLayoutWrapper"]:has(> .st-key-food_day_nav) {flex:1 1 260px!important;}
+.st-key-food_day_nav > [data-testid="stElementContainer"] {flex:none;}
+.st-key-food_day_nav > [data-testid="stElementContainer"]:has(.food-day-title) {min-width:0;flex:0 1 auto;}
+.st-key-food_day_nav button {position:relative;min-height:38px!important;width:38px;padding:0!important;}
+.st-key-food_day_nav button [data-testid="stMarkdownContainer"] {position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+.st-key-food_day_nav button::before {content:"";flex:none;width:18px;height:18px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27black%27%20stroke-width%3D%272.4%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27m15%206-6%206%206%206%27%2F%3E%3C%2Fsvg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27black%27%20stroke-width%3D%272.4%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27m15%206-6%206%206%206%27%2F%3E%3C%2Fsvg%3E") center/contain no-repeat;}
+.st-key-food_next_day button::before {transform:scaleX(-1);}
+.st-key-food_day_nav button:disabled, .st-key-food_day_nav button:disabled:hover {opacity:.4;border-color:var(--ahead-border)!important;color:var(--ahead-muted)!important;box-shadow:none!important;}
+.st-key-food_day [data-testid="stPopoverButton"] {background:var(--ahead-card)!important;color:var(--ahead-title)!important;border:1px solid var(--ahead-border)!important;min-height:38px;}
+.st-key-food_day [data-testid="stPopoverButton"]:hover {border-color:#0E9AA7!important;color:#0E9AA7!important;}
+.food-day-title {display:flex;flex-direction:column;line-height:1.3;padding:0 6px;}
+.food-day-title strong {font-size:1.12rem;font-weight:800;color:var(--ahead-title);}
+.food-day-title span {font-size:.8rem;color:var(--ahead-muted);}
+.food-empty {color:var(--ahead-muted);font-size:.92rem;padding:2px 4px 4px;}
+.food-day {display:flex;gap:30px;flex-wrap:wrap;align-items:flex-start;}
+.food-ring-col {width:200px;flex:none;}
+.food-ring {position:relative;width:172px;height:172px;margin:0 auto;}
+.food-ring::before {content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(#0E9AA7 var(--share),var(--ahead-border) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 12px),#000 calc(100% - 11px));mask:radial-gradient(farthest-side,transparent calc(100% - 12px),#000 calc(100% - 11px));}
+.food-ring-center {position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+.food-ring-center i {width:20px;height:20px;background:#C98F1E;-webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat;}
+.food-ring-center strong {font-size:1.85rem;font-weight:800;line-height:1.15;color:var(--ahead-title);}
+.food-ring-center small {font-size:.74rem;color:var(--ahead-muted);}
+.food-split-label {font-size:.76rem;color:var(--ahead-muted);margin:14px 0 6px;}
+.food-split {display:flex;height:10px;border-radius:10px;overflow:hidden;background:var(--ahead-border);}
+.food-split-legend {display:flex;justify-content:space-between;gap:6px;font-size:.72rem;color:var(--ahead-muted);margin-top:6px;}
+.food-groups {flex:1;min-width:0;}
+.food-group {font-size:.78rem;font-weight:800;color:var(--ahead-muted);margin:6px 0 2px;}
+.food-group:not(:first-child) {margin-top:14px;}
+.food-row {display:grid;grid-template-columns:22px 72px 86px minmax(60px,1fr) 168px;gap:10px;align-items:center;padding:6px 0;font-size:.9rem;color:var(--ahead-text);}
+.food-row b {font-weight:800;color:var(--ahead-title);white-space:nowrap;}
+.food-icon {display:block;width:20px;height:20px;background:var(--tone);-webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat;}
+.food-track {height:9px;margin:0;}
+.food-track span {background:var(--tone);}
+.food-note {font-size:.78rem;color:var(--ahead-muted);}
+.food-wide {grid-column:span 2;}
+.food-pill {justify-self:start;font-size:.74rem;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap;background:color-mix(in srgb,var(--tone) 16%,var(--ahead-card));color:color-mix(in srgb,var(--tone) 62%,var(--ahead-title));}
+.food-meals {display:grid;gap:8px;}
+.food-meal {display:flex;gap:12px;align-items:center;padding:10px 14px;border-radius:14px;background:var(--ahead-card);border:1px solid var(--ahead-border);font-size:.88rem;color:var(--ahead-text);}
+.food-meal-icon {width:32px;height:32px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,#0E9AA7 14%,var(--ahead-card));}
+.food-meal-icon i {width:17px;height:17px;background:#0E9AA7;-webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat;}
+.food-meal time {min-width:3em;font-weight:800;color:var(--ahead-title);font-variant-numeric:tabular-nums;}
+.food-meal span:not(.food-meal-icon) {flex:1;min-width:0;}
+.food-meal small {font-size:.8rem;color:var(--ahead-muted);}
+.food-meal em {font-style:normal;white-space:nowrap;color:var(--ahead-muted);}
+/* follow the card's own width (the sidebar changes it), not the window's */
+@container food-day (max-width:760px) {.food-ring-col {width:100%;max-width:340px;margin:0 auto;} .food-groups {flex-basis:100%;}}
+@container food-day (max-width:500px) {.food-row {grid-template-columns:22px minmax(0,1fr) auto;} .food-row > .visual-track, .food-row > .food-note, .food-row > .food-pill {grid-column:2 / -1;}}
 .st-key-home_week {background:var(--ahead-card);border:1px solid var(--ahead-border);border-radius:20px;padding:18px 20px!important;box-shadow:0 6px 24px #102a5308;gap:14px!important;margin-top:16px;}
 .week-head {display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
 .week-title {font-size:1rem;font-weight:720;color:var(--ahead-title);}

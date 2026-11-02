@@ -19,6 +19,12 @@ def local_now():
     return datetime.now(ZoneInfo('Asia/Dubai'))
 
 
+def to_local(stamp):
+    """A stored UTC timestamp as local (Dubai) time."""
+    moment=datetime.fromisoformat(stamp)
+    return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).astimezone(ZoneInfo('Asia/Dubai'))
+
+
 def init_platform():
     with connection() as db:
         db.executescript("""
@@ -154,6 +160,15 @@ def save_food(patient_id, foods, nutrients, source='manual'):
     with connection() as db:
         db.execute("INSERT INTO food_entries(patient_id,foods_json,nutrients_json,source,created_at) VALUES(?,?,?,?,?)",(patient_id,json.dumps(foods),json.dumps(nutrients),source,now()))
     event(patient_id,'food_saved')
+
+
+def food_on_day(patient_id, day):
+    """Meals saved on one local (Dubai) day, earliest first, with no history limit."""
+    start,end=(datetime.combine(d,datetime.min.time(),tzinfo=ZoneInfo('Asia/Dubai')).astimezone(timezone.utc).isoformat()
+               for d in (day,day+timedelta(days=1)))
+    with connection() as db:
+        return [{**dict(r),'foods':json.loads(r['foods_json']),'nutrients':json.loads(r['nutrients_json'])} for r in db.execute(
+            "SELECT * FROM food_entries WHERE patient_id=? AND created_at>=? AND created_at<? ORDER BY created_at,id",(patient_id,start,end))]
 
 
 def food_history(patient_id):

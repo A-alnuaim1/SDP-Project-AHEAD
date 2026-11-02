@@ -4,7 +4,6 @@ from html import escape
 import math
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 from ahead.resources import icon_uri
 from ahead.theme import style_figure, show_chart
@@ -107,15 +106,104 @@ def week_strip(days, today):
 <span class="week-streak" style="--flame:url('{icon_uri('dashboard/challenge.svg')}')">{streak_text}</span></div>
 <div class="week-days" aria-label="Active days this week">{''.join(cells)}</div>''')
 
-def macros(nutrients):
-    values=[float(nutrients.get(key) or 0) for key in ('protein','carbs','fat')]
-    if any(not math.isfinite(v) or v<0 for v in values) or not any(values):
-        st.info('Add confirmed protein, carbohydrate and fat estimates to see a macronutrient chart.')
-        return
-    fig=go.Figure(go.Pie(labels=['Protein (g)','Carbohydrates (g)','Fat (g)'],values=values,hole=.68,marker_colors=['#0E9AA7','#C98F1E','#14556B'],textinfo='percent',hovertemplate='%{label}: %{value:g}<br>%{percent}<extra></extra>'))
-    fig.update_layout(title='Macronutrient proportions by mass')
-    show_chart(style_figure(fig,300,legend=True))
-    st.caption('Shares use grams of these three macronutrients, not calorie percentages. All values are estimates.')
+# General daily values for adults on a 2,000-calorie diet (US FDA Nutrition Facts label). A 'goal' is
+# worth reaching, a 'limit' worth staying under; total sugar has no daily value (only added sugar does).
+CALORIE_REFERENCE = 2000
+NUTRIENT_GROUPS = [
+    ('Macronutrients', [('protein', 'Protein', 'g', 50, 'reference', '#2E9477'),
+                        ('carbs', 'Carbs', 'g', 275, 'reference', '#C98F1E'),
+                        ('fat', 'Fat', 'g', 78, 'reference', '#5B8FA3')]),
+    ('Fiber, sugar and salt', [('fiber', 'Fiber', 'g', 28, 'goal', '#2E9477'),
+                               ('sodium', 'Sodium', 'mg', 2300, 'limit', '#C9706E'),
+                               ('sugar', 'Sugar', 'g', None, None, '#8E7CC3')]),
+]
+
+
+def amount(value):
+    """A stored nutrient as a number; missing or invalid entries count as 0."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) and number > 0 else 0.0
+
+
+def shown(value, unit):
+    """The amount as displayed: whole kcal, mg and values from 100 up, otherwise one decimal."""
+    return round(value) if unit in ('kcal', 'mg') or value >= 100 else round(value, 1)
+
+
+def quantity(value, unit):
+    amount = shown(value, unit)
+    return f'{amount:,}' if isinstance(amount, int) else f'{amount:g}'
+
+
+def percent(part, whole):
+    """Whole percent that never rounds up to 100% before the amount gets there."""
+    share = part / whole * 100
+    return math.floor(share) if share < 100 else round(share)
+
+
+def _pill(text, tone):
+    return f'<span class="food-pill" style="--tone:{tone}">{escape(text)}</span>'
+
+
+def _nutrient_row(key, label, unit, reference, kind, tone, total, is_today):
+    icon = f'<i class="food-icon" style="--icon:url({icon_uri(f"food/{key}.svg")})" aria-hidden="true"></i>'
+    head = f'{icon}<span>{escape(label)}</span><b>{quantity(total, unit)} {unit}</b>'
+    if reference is None:
+        return f'<div class="food-row" style="--tone:{tone}">{head}<span class="food-note food-wide">No daily value for total {label.lower()}</span></div>'
+    # Judge the amount the row shows, so "28 g" never sits next to "0 g to go".
+    share = percent(shown(total, unit), reference)
+    limit = f'{reference:,} {unit}'
+    if kind == 'goal' and share >= 100:
+        note = _pill('Daily value reached', tone)
+    elif kind == 'goal' and is_today:
+        note = _pill(f'{quantity(reference - shown(total, unit), unit)} {unit} to go', tone)
+    elif kind == 'limit' and shown(total, unit) > reference:
+        note = _pill('Above the daily limit', '#C9706E')
+    elif kind == 'limit' and share >= 80:
+        note = _pill('Near the daily limit', '#C98F1E')
+    elif kind == 'reference' and share >= 100:
+        note = _pill(f'{share:.0f}% of {limit}', tone)
+    else:
+        note = f'<span class="food-note">{share:.0f}% of {limit}{" limit" if kind == "limit" else ""}</span>'
+    bar = (f'<div class="visual-track food-track" role="progressbar" aria-valuenow="{min(100, share):.0f}" aria-valuemin="0" '
+           f'aria-valuemax="100" aria-label="{escape(label)}"><span style="width:{min(100, share):.0f}%"></span></div>')
+    return f'<div class="food-row" style="--tone:{tone}">{head}{bar}{note}</div>'
+
+
+def day_totals(totals, meals, is_today):
+    """
+    One day's meals added up (Food Nutrition Analyzer): a calorie ring, where the calories came from,
+    each nutrient against its general daily value, and the meals themselves. *meals* are dicts with
+    time, foods, portion, calories and photo (True when the estimate came from a photo).
+    """
+    calories = totals['calories']
+    share = percent(shown(calories, 'kcal'), CALORIE_REFERENCE)
+    ring = f'''<div class="food-ring" style="--share:{min(100, share):.1f}%" role="img" aria-label="{quantity(calories, 'kcal')} kcal, {share:.0f}% of a {CALORIE_REFERENCE:,} kcal reference">
+<div class="food-ring-center"><i style="--icon:url({icon_uri('food/calories.svg')})" aria-hidden="true"></i>
+<strong>{quantity(calories, 'kcal')}</strong><small>kcal · {share:.0f}% of {CALORIE_REFERENCE:,}</small></div></div>'''
+    energy = {'Protein': totals['protein'] * 4, 'Carbs': totals['carbs'] * 4, 'Fat': totals['fat'] * 9}
+    split = ''
+    if sum(energy.values()):
+        parts = {name: value / sum(energy.values()) * 100 for name, value in energy.items()}
+        tones = {'Protein': '#2E9477', 'Carbs': '#C98F1E', 'Fat': '#5B8FA3'}
+        split = ('<div class="food-split-label">Where calories came from</div><div class="food-split" aria-hidden="true">'
+                 + ''.join(f'<span style="width:{part:.1f}%;background:{tones[name]}"></span>' for name, part in parts.items())
+                 + '</div><div class="food-split-legend">'
+                 + ''.join(f'<span>{name} {part:.0f}%</span>' for name, part in parts.items()) + '</div>')
+    groups = ''.join(f'<div class="food-group">{escape(title)}</div>'
+                     + ''.join(_nutrient_row(*row, totals[row[0]], is_today) for row in rows)
+                     for title, rows in NUTRIENT_GROUPS)
+    meal_rows = ''.join(
+        f'''<div class="food-meal"><span class="food-meal-icon" title="{'From a photo' if meal['photo'] else 'Entered by hand'}">
+<i style="--icon:url({icon_uri('food/photo.svg' if meal['photo'] else 'food/manual.svg')})" aria-hidden="true"></i></span>
+<time>{escape(meal['time'])}</time><span>{escape(meal['foods'])} <small>· {escape(meal['portion'])}</small></span>
+<em>{quantity(meal['calories'], 'kcal')} kcal</em></div>''' for meal in meals)
+    st.html(f'''<div class="food-day"><div class="food-ring-col">{ring}{split}</div>
+<div class="food-groups">{groups}</div></div><div class="food-meals">{meal_rows}</div>''')
+
 
 def adherence_chart(doses):
     if not doses: return

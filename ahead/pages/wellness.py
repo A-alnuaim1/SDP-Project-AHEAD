@@ -6,7 +6,7 @@ import plotly.express as px
 import streamlit as st
 
 from ahead.components import page_header
-from ahead.platform_data import (challenge_days,food_history,get_goals,lifestyle_history,
+from ahead.platform_data import (challenge_days,food_history,to_local,get_goals,lifestyle_history,
                                  save_lifestyle,set_challenge_day,set_goals)
 from ahead.wellness import challenge_summary,evaluate
 from ahead.platform_data import local_today
@@ -84,7 +84,7 @@ def render_wellness():
         if meals:
             st.subheader('Confirmed food entries')
             st.caption('Nutrition figures below come from your confirmed estimates, not from the wellness scoring formula.')
-            food_frame=pd.DataFrame([{'Date':r['created_at'][:10], 'Calories (estimated)':r['nutrients'].get('calories',0),
+            food_frame=pd.DataFrame([{'Date':to_local(r['created_at']).date().isoformat(), 'Calories (estimated)':r['nutrients'].get('calories',0),
                  'Protein (g, estimated)':r['nutrients'].get('protein',0),'Food':', '.join(r['foods'])} for r in meals])
             st.dataframe(food_frame,hide_index=True,width='stretch')
     with goal_tab:

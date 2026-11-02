@@ -1,16 +1,19 @@
 """Food photo preview and optional real Gemini image analysis with manual confirmation."""
 import base64
 import json
+from datetime import timedelta
 
 import pandas as pd
 import streamlit as st
 
 from ahead.components import page_header
-from ahead.platform_data import food_history,save_food
+from ahead.platform_data import food_history,food_on_day,local_today,save_food,to_local
 from ahead.resources import gemini_api_key,gemini_interaction,gemini_error_message
-from ahead.visuals import metric,macros
+from ahead.visuals import amount,day_totals
 
 FIELDS={'calories':'kcal','protein':'g','carbs':'g','fat':'g','sugar':'g','fiber':'g','sodium':'mg'}
+DAY_KEY='food_day_picker'
+EARLIEST=365   # days back the day picker reaches
 
 
 def analyze_photo(data,mime):
@@ -29,6 +32,54 @@ def analyze_photo(data,mime):
     parsed=json.loads(raw)
     if not isinstance(parsed,dict) or not isinstance(parsed.get('foods'),list):raise ValueError('No usable foods detected. Enter them manually.')
     return parsed
+
+
+def _shift_day(step):
+    """Previous/next-day buttons: move the day picker one day, within its range."""
+    today=local_today()
+    day=st.session_state.get(DAY_KEY,today)+timedelta(days=step)
+    st.session_state[DAY_KEY]=min(today,max(today-timedelta(days=EARLIEST),day))
+
+
+def _day_title(day,today,meals):
+    name={today:'Today',today-timedelta(days=1):'Yesterday'}.get(day)
+    count=f"{len(meals)} meal{'s' if len(meals)!=1 else ''}" if meals else 'no meals'
+    when=f'{day.day} {day:%B %Y}'
+    return (f'<div class="food-day-title"><strong>{name or f"{day:%A}"}</strong>'
+            f'<span>{f"{day:%A} " if name else ""}{when} · {count}</span></div>')
+
+
+def render_daily_totals(owner):
+    """Daily totals card: pick a day, see its meals added up against general daily values."""
+    today=local_today()
+    earliest=today-timedelta(days=EARLIEST)
+    # Keep the picker inside its range, e.g. when the page stays open past midnight; the widget
+    # raises if its stored value falls outside min/max, and it has not been created yet in this run.
+    st.session_state[DAY_KEY]=min(today,max(earliest,st.session_state.get(DAY_KEY,today)))
+    day=st.session_state[DAY_KEY]
+    meals=food_on_day(owner,day)
+    st.subheader('Daily totals')
+    with st.container(key='food_day'):
+        with st.container(horizontal=True,vertical_alignment='center',horizontal_alignment='distribute'):
+            with st.container(horizontal=True,vertical_alignment='center',gap='small',key='food_day_nav'):
+                st.button('Previous day',key='food_prev_day',on_click=_shift_day,args=(-1,),disabled=day<=earliest)
+                st.html(_day_title(day,today,meals),width='content')
+                st.button('Next day',key='food_next_day',on_click=_shift_day,args=(1,),disabled=day>=today)
+            with st.popover('Pick a day',icon=':material/calendar_month:'):
+                st.date_input('Day',key=DAY_KEY,min_value=earliest,max_value=today,format='DD/MM/YYYY',
+                              label_visibility='collapsed')
+        if not meals:
+            st.html('<div class="food-empty">'+('No meals logged today yet. Meals you confirm above add up here.'
+                    if day==today else 'No meals were logged on this day.')+'</div>')
+        else:
+            totals={field:sum(amount(m['nutrients'].get(field)) for m in meals) for field in FIELDS}
+            day_totals(totals,[{'time':to_local(m['created_at']).strftime('%H:%M'),'foods':', '.join(map(str,m['foods'])),
+                                'portion':str(m['nutrients'].get('portion','')),'calories':amount(m['nutrients'].get('calories')),
+                                'photo':m['source']=='gemini_estimate_confirmed'} for m in meals],day==today)
+    if meals:
+        st.caption('Daily values are general references for adults on a 2,000-calorie diet (US FDA). Your needs depend on '
+                   'age, body size, activity and health; a doctor or dietitian can suggest personal targets. '
+                   'Totals add up your confirmed estimates, so they are approximate.')
 
 
 def render_food():
@@ -72,6 +123,7 @@ def render_food():
             source='gemini_estimate_confirmed' if result else 'manual_estimate'
             save_food(owner,selected,{**estimates,'portion':portion.strip()},source)
             st.session_state.pop('meal_analysis',None)
+            st.session_state[DAY_KEY]=local_today()   # show the day the meal was added to
             st.success('Confirmed meal saved. The numbers remain approximate.')
             labels=[]
             if estimates['protein']>=20:labels.append('Contains at least 20 g estimated protein')
@@ -79,19 +131,11 @@ def render_food():
             if estimates['sugar']>=20:labels.append('Contains at least 20 g estimated sugar')
             if estimates['sodium']>=600:labels.append('Contains at least 600 mg estimated sodium')
             if labels:st.info('Per estimated portion: '+', '.join(labels)+'. Check packaging or a food database for reliable numbers.')
+    render_daily_totals(owner)
     records=food_history(owner)
-    if records:
-        latest=records[0]['nutrients']
-        st.subheader('Latest confirmed meal')
-        st.caption(', '.join(records[0]['foods']) + ' · ' + latest.get('portion',''))
-        cols=st.columns(4)
-        colors=['#C98F1E','#0E9AA7','#E0B65A','#14556B','#D2565C','#2E9477','#5B8FA3']
-        for i,(field,unit) in enumerate(FIELDS.items()):
-            with cols[i%4]:metric(field.title(),f"{latest.get(field,0):g} {unit}",'Confirmed estimate',colors[i])
-        macros(latest)
     st.subheader('Meal history')
     if not records:st.info('No confirmed meals yet.')
     else:
-        st.dataframe(pd.DataFrame([{'Date':r['created_at'][:16],'Foods':', '.join(r['foods']),
+        st.dataframe(pd.DataFrame([{'Date':to_local(r['created_at']).strftime('%Y-%m-%d %H:%M'),'Foods':', '.join(r['foods']),
             'Portion':r['nutrients']['portion'],**{k:r['nutrients'].get(k) for k in FIELDS},'Source':r['source']} for r in records]),hide_index=True,width='stretch')
         st.caption('High/low nutrition labels require reliable ingredient and portion data; please review estimates yourself.')

@@ -8,7 +8,7 @@ from datetime import date,timedelta
 from ahead.storage import init_db,create_user,authenticate,save_screening,load_screenings
 from ahead.platform_data import (init_platform,grant_doctor,allowed,linked_patients,patient_screenings,
     save_lifestyle,lifestyle_history,set_goals,get_goals,set_challenge_day,challenge_days,
-    save_food,food_history,save_plan,plans,scheduled_doses,mark_dose,notify,notifications,
+    save_food,food_history,food_on_day,to_local,save_plan,plans,scheduled_doses,mark_dose,notify,notifications,
     record_prediction_history,append_record_prediction)
 from ahead.wellness import evaluate,challenge_summary
 from ahead.clinical_data import validate_row
@@ -55,6 +55,33 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(challenge_summary(challenge_days(self.p))['completed'],1)
         save_food(self.p,['rice'],{'calories':300,'portion':'1 bowl'})
         self.assertEqual(food_history(self.p)[0]['foods'],['rice'])
+
+    def test_meals_group_by_local_day(self):
+        import json
+        from ahead.storage import connection
+        from ahead.visuals import amount
+        day=date(2026,11,2)
+        # 23:30 UTC on 1 November is 03:30 on 2 November in Dubai; 20:00 UTC on 2 November is the next local day.
+        for stamp,food in [('2026-11-01T19:59:59.999999+00:00','before'),('2026-11-01T23:30:00+00:00','early'),
+                           ('2026-11-02T19:59:59+00:00','late'),('2026-11-02T20:00:00+00:00','next')]:
+            with connection() as db:
+                db.execute("INSERT INTO food_entries(patient_id,foods_json,nutrients_json,source,created_at) VALUES(?,?,?,?,?)",
+                           (self.p,json.dumps([food]),json.dumps({'calories':'x'}),'manual_estimate',stamp))
+        self.assertEqual([m['foods'][0] for m in food_on_day(self.p,day)],['early','late'])
+        self.assertEqual(food_on_day(self.q,day),[])
+        self.assertEqual(to_local('2026-11-01T23:30:00+00:00').strftime('%Y-%m-%d %H:%M'),'2026-11-02 03:30')
+        self.assertEqual([amount(v) for v in (None,'x',float('nan'),-5,'12.5',3)],[0.0,0.0,0.0,0.0,12.5,3.0])
+
+    def test_daily_value_notes_match_the_rounded_amount(self):
+        import re
+        from ahead.visuals import _nutrient_row,percent,quantity
+        row=lambda *a:' '.join(re.sub(r'<[^>]+>',' ',_nutrient_row(*a)).split())
+        self.assertIn('Daily value reached',row('fiber','Fiber','g',28,'goal','#000',27.96,True))   # shown as 28 g
+        self.assertIn('0.1 g to go',row('fiber','Fiber','g',28,'goal','#000',27.94,True))
+        self.assertIn('99% of 50 g',row('protein','Protein','g',50,'reference','#000',49.8,True))   # never a premature 100%
+        self.assertIn('Above the daily limit',row('sodium','Sodium','mg',2300,'limit','#000',2301,True))
+        self.assertIn('Near the daily limit',row('sodium','Sodium','mg',2300,'limit','#000',2300,True))
+        self.assertEqual((percent(1999,2000),quantity(1234567.4,'kcal'),quantity(12.25,'g')),(99,'1,234,567','12.2'))
 
     def test_medication_permissions_and_logs(self):
         data={'name':'Sample','dosage':'1 tablet','instructions':'As instructed','times':['00:00'],
