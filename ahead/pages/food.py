@@ -34,7 +34,7 @@ def analyze_photo(data,mime):
 def render_food():
     owner=st.session_state.user['id']
     page_header('Patient nutrition','Food Nutrition Analyzer','Review and confirm meal entries for your food history.')
-    st.info('Photo analysis requires a configured Gemini vision API. All nutrients are rough estimates; photos cannot reveal exact ingredients or portion weights. Images are not stored in AHEAD.')
+    st.info('All nutrients are rough estimates; photos cannot reveal exact ingredients or portion weights. Images are not stored in AHEAD.')
     uploaded=st.file_uploader('Upload or take a food photo',type=['jpg','jpeg','png','webp'],key='meal_photo')
     if uploaded:
         if uploaded.size>8*1024*1024:st.error('Photo exceeds 8 MB.');return
