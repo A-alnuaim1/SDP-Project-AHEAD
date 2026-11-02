@@ -33,7 +33,7 @@ def analyze_photo(data,mime):
 
 def render_food():
     owner=st.session_state.user['id']
-    page_header('Patient nutrition','Food Nutrition Analyzer','Review and confirm meal entries for your food history.')
+    page_header('Patient nutrition','Food Nutrition Analyzer',"Understand what's on your plate: log meals, review their nutrients and track how you eat over time.")
     st.info('All nutrients are rough estimates; photos cannot reveal exact ingredients or portion weights. Images are not stored in AHEAD.')
     uploaded=st.file_uploader('Upload or take a food photo',type=['jpg','jpeg','png','webp'],key='meal_photo')
     if uploaded:
