@@ -110,15 +110,17 @@ def render_login() -> None:
             st.html(
                 f"""
 <div class="ahead-login-brand">
-    <div class="ahead-login-logo">
-        <img class="ahead-login-logo-icon" src="{image_data_uri('logo.svg')}" alt="AHEAD logo">
-        <div class="ahead-login-logo-text">AHEAD</div>
+    <div class="ahead-login-main">
+        <div class="ahead-login-logo">
+            <img class="ahead-login-logo-icon" src="{image_data_uri('logo.svg')}" alt="AHEAD logo">
+            <div class="ahead-login-logo-text">AHEAD</div>
+        </div>
+        <h1>Advanced Health<br>Early Awareness and<br>Disease Detection System</h1>
+        <div class="ahead-login-description">
+            AI-powered health screening designed to support earlier awareness and smarter healthcare decisions.
+        </div>
+        {feature_rows}
     </div>
-    <h1>Advanced Health<br>Early Awareness and<br>Disease Detection System</h1>
-    <div class="ahead-login-description">
-        AI-powered health screening designed to support earlier awareness and smarter healthcare decisions.
-    </div>
-    {feature_rows}
     <div class="ahead-login-tagline">Early Detection. Healthier Tomorrows.</div>
 </div>
 """

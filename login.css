@@ -45,8 +45,17 @@
 }
 .st-key-login_shell [data-testid="stHorizontalBlock"] { gap: 0 !important; }
 
-/* left brand panel */
+/* left brand panel: fills its column so it always matches the sign-in card's height
+   (the card grows with the hosted-demo note, the doctor note or the open registration form) */
+.st-key-login_shell [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child,
+.st-key-login_shell [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child > [data-testid="stVerticalBlock"],
+.st-key-login_shell [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child [data-testid="stElementContainer"],
+.st-key-login_shell [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child [data-testid="stHtml"] {
+    display: flex; flex-direction: column; flex: 1 1 auto;
+}
+.ahead-login-main > :last-child { margin-bottom: 0; }
 .ahead-login-brand {
+    display: flex; flex-direction: column; justify-content: space-between; flex: 1 1 auto; box-sizing: border-box;
     min-height: 520px;
     padding: 42px 48px 28px 48px;
     background:
