@@ -62,6 +62,9 @@
 .summary-label {display:block;margin-top:12px;font-size:.84rem;font-weight:700;color:color-mix(in srgb,var(--tone) 55%,var(--ahead-title));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .summary-value {display:block;margin-top:2px;font-size:1.7rem;font-weight:760;line-height:1.2;color:var(--ahead-title);}
 .summary-value small {font-size:.8rem;font-weight:600;color:var(--ahead-muted);}
+/* narrow cards (four across a narrow window) wrap the label and shrink the figure instead of cutting them off */
+[data-testid="stHtml"]:has(.summary-inner) {container:summary-card / inline-size;}
+@container summary-card (max-width:210px) {.summary-inner {padding:14px;}.summary-label {font-size:.78rem;white-space:normal;hyphens:auto;}.summary-value {font-size:1.3rem;overflow-wrap:anywhere;}}
 .summary-bar {height:6px;margin-top:8px;border-radius:6px;overflow:hidden;background:color-mix(in srgb,var(--tone) 16%,var(--ahead-card));}
 .summary-bar span {display:block;height:100%;border-radius:6px;background:var(--tone);}
 .summary-note {margin:8px 0 0;font-size:.74rem;line-height:1.45;}
