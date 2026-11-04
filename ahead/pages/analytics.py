@@ -73,13 +73,22 @@ def _threshold_figure(rows: list, chosen: float) -> go.Figure:
     frame = pd.DataFrame(rows)
     t = tokens()
     figure = go.Figure()
-    figure.add_trace(go.Scatter(x=frame["threshold"], y=frame["recall"], name="Recall", line=dict(color=t["accent"], width=3)))
-    figure.add_trace(go.Scatter(x=frame["threshold"], y=frame["precision"], name="Precision", line=dict(color="#5B8FA3", width=3)))
-    figure.add_trace(go.Scatter(x=frame["threshold"], y=frame["f2"], name="F2", line=dict(color=t["warning"], width=3, dash="dot")))
-    figure.add_vline(x=chosen, line=dict(color=t["danger"], width=2, dash="dash"),
-                     annotation_text=f"chosen {chosen:.2f}", annotation_position="top left")
-    style_figure(figure, height=320, legend=True)
-    figure.update_layout(title="Validation threshold sweep (recommended model)", xaxis_title="Probability threshold", yaxis_title="Score")
+    for column, name, colour, dash in [("recall", "Recall", t["accent"], "solid"), ("precision", "Precision", "#8E7CC3", "solid"),
+                                       ("f2", "F2 (recall counts double)", "#C98F1E", "dash")]:
+        figure.add_trace(go.Scatter(x=frame["threshold"], y=frame[column], name=name, mode="lines",
+                                    line=dict(color=colour, width=3, dash=dash, shape="spline"),
+                                    hovertemplate=f"{name}: %{{y:.0%}}<extra></extra>"))
+        # The chosen threshold's value on each line, so the trade-off reads straight off the chart.
+        at = frame.iloc[(frame["threshold"] - chosen).abs().argmin()]
+        figure.add_trace(go.Scatter(x=[at["threshold"]], y=[at[column]], mode="markers", showlegend=False, hoverinfo="skip",
+                                    marker=dict(size=10, color=colour, line=dict(color=t["card"], width=2))))
+    figure.add_vline(x=chosen, line=dict(color=t["muted"], width=1.5, dash="dot"))
+    figure.add_annotation(x=chosen, y=1.08, yref="paper", text=f"Chosen threshold {chosen:.0%}", showarrow=False,
+                          font=dict(size=12, color=t["title"]), bgcolor=t["card"], bordercolor=t["border"], borderpad=4)
+    style_figure(figure, height=360, legend=True)
+    figure.update_layout(title="Choosing the decision threshold", hovermode="x unified", margin=dict(t=80, r=36))
+    figure.update_xaxes(title="Decision threshold", tickformat=".0%", range=[0, 1], hoverformat=".0%")
+    figure.update_yaxes(title="", tickformat=".0%", range=[0, 1.05])
     return figure
 
 
@@ -159,13 +168,15 @@ def render_analytics() -> None:
             for column, (key, label, value, note, colour, icon) in zip(st.columns(5), scores):
                 with column:
                     summary_tile(f"analytics_{disease}_{key}", label, value, note, colour, icon)
-            st.caption(
-                f"Decision threshold: {details.get('decision_threshold', 0.5):.2f} · "
-                f"Selection metric: {METRIC_COLUMNS.get(details.get('selection_metric', ''), details.get('selection_metric', ''))}"
-            )
+            threshold = float(details.get("decision_threshold", 0.5))
+            selection = METRIC_COLUMNS.get(details.get("selection_metric", ""), details.get("selection_metric", ""))
+            st.caption(f"The recommended model flags a result when its score reaches {threshold:.0%}. "
+                       f"It was picked from the model families by {selection} on the validation split.")
 
             if details.get("threshold_results"):
-                show_chart(_threshold_figure(details["threshold_results"], float(details.get("decision_threshold", 0.5))))
+                show_chart(_threshold_figure(details["threshold_results"], threshold))
+                st.caption(f"A higher threshold flags fewer people: precision rises and recall falls. {threshold:.0%} is where F2, "
+                           "which counts recall twice as much as precision, peaks on the validation split.")
 
             _model_comparison(disease)
 
