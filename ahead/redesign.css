@@ -64,7 +64,8 @@
 .summary-value small {font-size:.8rem;font-weight:600;color:var(--ahead-muted);}
 /* narrow cards (four across a narrow window) wrap the label and shrink the figure instead of cutting them off */
 [data-testid="stHtml"]:has(.summary-inner) {container:summary-card / inline-size;}
-@container summary-card (max-width:210px) {.summary-inner {padding:14px;}.summary-label {font-size:.78rem;white-space:normal;hyphens:auto;}.summary-value {font-size:1.3rem;overflow-wrap:anywhere;}}
+@container summary-card (max-width:210px) {.summary-inner {padding:14px;}.summary-label {font-size:.78rem;white-space:normal;hyphens:auto;}.summary-value {font-size:clamp(1rem,12cqi,1.3rem);overflow-wrap:anywhere;}}
+@container summary-card (max-width:130px) {.summary-inner {padding:12px;}}
 .summary-bar {height:6px;margin-top:8px;border-radius:6px;overflow:hidden;background:color-mix(in srgb,var(--tone) 16%,var(--ahead-card));}
 .summary-bar span {display:block;height:100%;border-radius:6px;background:var(--tone);}
 .summary-note {margin:8px 0 0;font-size:.74rem;line-height:1.45;}

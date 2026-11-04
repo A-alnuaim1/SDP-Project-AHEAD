@@ -30,12 +30,14 @@ METRIC_COLUMNS = {
 }
 
 
-def _target_figure(dataset: pd.DataFrame, target: str, title: str) -> go.Figure:
-    counts = dataset[target].astype(str).value_counts().reset_index()
-    counts.columns = ["Class", "Count"]
-    figure = px.bar(counts, x="Class", y="Count", title=f"{title} — Target Distribution", text_auto=".3s")
-    figure.update_traces(marker_color=tokens()["accent"])
+def _target_figure(dataset: pd.DataFrame, target: str) -> go.Figure:
+    # Targets are stored as 0/1 or No/Yes; either way the positive class means the record has the condition.
+    has = dataset[target].astype(str).isin(["1", "Yes"])
+    counts = pd.DataFrame({"Outcome": ["Without", "With"], "Count": [int((~has).sum()), int(has.sum())]})
+    figure = px.bar(counts, x="Outcome", y="Count", title="Records by outcome", text_auto=".3s")
+    figure.update_traces(marker_color=[tokens()["accent"], "#C9706E"], hovertemplate="%{x} the condition: %{y:,}<extra></extra>")
     style_figure(figure, height=330)
+    figure.update_layout(xaxis_title="", yaxis_title="")
     return figure
 
 
@@ -54,13 +56,14 @@ def _feature_distribution(disease: str, feature: str) -> pd.DataFrame:
 
 def _feature_figure(disease: str, feature: str) -> go.Figure:
     frame = _feature_distribution(disease, feature)
-    title = f"{pretty_label(feature)} Distribution"
+    title = pretty_label(feature)
     if "width" in frame.columns:
-        figure = go.Figure(go.Bar(x=frame["Value"], y=frame["Count"], width=frame["width"], marker_color="#5B8FA3"))
+        figure = go.Figure(go.Bar(x=frame["Value"], y=frame["Count"], width=frame["width"], marker_color="#5B8FA3",
+                                  hovertemplate="%{x:.3g}: %{y:,}<extra></extra>"))
         figure.update_layout(title=title, bargap=0.05)
     else:
-        figure = px.bar(frame, x="Value", y="Count", title=title)
-        figure.update_traces(marker_color="#5B8FA3")
+        figure = px.bar(frame, x="Value", y="Count", title=title, text_auto=".3s")
+        figure.update_traces(marker_color="#5B8FA3", hovertemplate="%{x}: %{y:,}<extra></extra>")
     style_figure(figure, height=330)
     figure.update_layout(xaxis_title="", yaxis_title="")
     return figure
@@ -133,25 +136,29 @@ def render_analytics() -> None:
                 with column:
                     summary_tile(f"analytics_{disease}_{key}", label, value, note, colour, icon)
 
+            section_heading("Explore the data", "How many records have the condition, and how each screening input is spread across the dataset.")
+            # The picker gets its own row above the right chart, so both charts start at the same height.
+            selected_feature = st.columns(2)[1].selectbox(
+                "Input to explore", model_features, format_func=pretty_label, key=f"explorer_{disease}",
+            )
             left, right = st.columns(2)
             with left:
-                show_chart(_target_figure(dataset, target, info["label"]))
+                show_chart(_target_figure(dataset, target))
             with right:
-                selected_feature = st.selectbox(
-                    "Feature to explore", model_features, format_func=pretty_label, key=f"explorer_{disease}",
-                )
                 show_chart(_feature_figure(disease, selected_feature))
 
             # ------------------------------------------------------------ final test metrics
             section_heading("Final Model Performance", "Measured once on the untouched test set with the recommended model.")
             metrics = final_metrics(disease)
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Accuracy", f"{metrics.get('accuracy', 0) * 100:.2f}%")
-            m2.metric("Disease recall", f"{metrics.get('recall_disease', 0) * 100:.2f}%")
-            m3.metric("Disease F1", f"{metrics.get('f1_disease', 0):.4f}")
-            m4.metric("Macro-F1", f"{metrics.get('macro_f1', 0):.4f}")
             auc = metrics.get("roc_auc")
-            m5.metric("ROC-AUC", f"{auc:.4f}" if auc is not None else "N/A")
+            scores = [("accuracy", "Accuracy", f"{metrics.get('accuracy', 0) * 100:.2f}%", "Test records classified correctly", "#0E9AA7", "goals"),
+                      ("recall", "Disease recall", f"{metrics.get('recall_disease', 0) * 100:.2f}%", "People with the condition the model flags", "#C9706E", "flagged"),
+                      ("f1", "Disease F1", f"{metrics.get('f1_disease', 0):.4f}", "Balance of precision and recall", "#8E7CC3", "scored"),
+                      ("macro_f1", "Macro-F1", f"{metrics.get('macro_f1', 0):.4f}", "F1 averaged over both outcomes", "#C98F1E", "review"),
+                      ("auc", "ROC-AUC", f"{auc:.4f}" if auc is not None else "N/A", "How well scores rank cases first", "#2E9477", "activity")]
+            for column, (key, label, value, note, colour, icon) in zip(st.columns(5), scores):
+                with column:
+                    summary_tile(f"analytics_{disease}_{key}", label, value, note, colour, icon)
             st.caption(
                 f"Decision threshold: {details.get('decision_threshold', 0.5):.2f} · "
                 f"Selection metric: {METRIC_COLUMNS.get(details.get('selection_metric', ''), details.get('selection_metric', ''))}"
