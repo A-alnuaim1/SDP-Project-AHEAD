@@ -79,6 +79,16 @@ def init_db():
                                    ("previous_id", "INTEGER")):
             if column not in screening_columns:
                 db.execute(f"ALTER TABLE screenings ADD COLUMN {column} {definition}")
+        # One-time repairs of records saved by earlier versions; user_version marks them done so a rerun skips the scans.
+        if db.execute("PRAGMA user_version").fetchone()[0] < 1:
+            # Values once blocked by the exact training range ("...; verify it.") are rechecked against the wider bounds.
+            legacy = db.execute("SELECT id,disease,status,values_json,issues_json FROM records WHERE issues_json LIKE ?",
+                                ("%is outside the training range (%; verify it.%",)).fetchall()
+            if legacy:
+                _recheck_old_ranges(db, legacy)
+            # Uploads were once saved without a status, so valid unscored rows were left 'Incomplete'.
+            db.execute("UPDATE records SET status='Ready' WHERE status='Incomplete' AND issues_json='[]' AND score IS NULL")
+            db.execute("PRAGMA user_version=1")
     # Demo accounts are explicitly enabled for classroom use only.
     if os.environ.get("AHEAD_ENABLE_DEMO_ACCOUNTS") == "1":
         create_user("user@ahead.demo", "user123", ROLE_PATIENT, "Sarah Ahmed", demo=True)
@@ -92,6 +102,23 @@ def init_db():
             # A misconfigured secret must not take the whole site down (including sign-in).
             logging.getLogger(__name__).warning(
                 "AHEAD_DOCTOR_PASSWORD is shorter than 12 characters; the doctor account was not created.")
+
+
+def _recheck_old_ranges(db, rows):
+    # Imported here: only a database saved before the wider bounds needs the model statistics at start-up.
+    from ahead.clinical_data import validate_row
+    from ahead.resources import feature_summary
+    # Datasets load before the first UPDATE, so no write lock is held (blocking other sessions) while they are read.
+    summaries, updates = {disease: feature_summary(disease) for disease in {row["disease"] for row in rows}}, []
+    for row in rows:
+        values, stats, issues = json.loads(row["values_json"]), summaries[row["disease"]], []
+        for issue in json.loads(row["issues_json"]):
+            feature = issue.split(":", 1)[0]
+            old = " is outside the training range (" in issue and issue.endswith("; verify it.") and feature in stats
+            issues += validate_row(values, row["disease"], [feature], stats)[1] if old else [issue]
+        status = "Ready" if not issues and row["status"] == "Incomplete" else row["status"]
+        updates.append((json.dumps(issues), status, row["id"]))
+    db.executemany("UPDATE records SET issues_json=?,status=? WHERE id=?", updates)
 
 
 def has_doctor_account():
@@ -160,10 +187,10 @@ def insert_records(owner_id, cohort, disease, rows):
     now = datetime.now(timezone.utc).isoformat()
     with connection() as db:
         for index, row in enumerate(rows, 1):
-            db.execute("""INSERT INTO records(owner_id,cohort,disease,patient_id,source_row,values_json,dob,issues_json,created_at,updated_at)
-                       VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            db.execute("""INSERT INTO records(owner_id,cohort,disease,patient_id,source_row,values_json,dob,issues_json,status,created_at,updated_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                        (owner_id, cohort, disease, row["patient_id"], index, json.dumps(row["values"]),
-                        row.get("dob"), json.dumps(row["issues"]), now, now))
+                        row.get("dob"), json.dumps(row["issues"]), "Incomplete" if row["issues"] else "Ready", now, now))
 
 
 def list_records(owner_id, disease=None):
@@ -187,6 +214,25 @@ def update_record(owner_id, record_id, **fields):
     with connection() as db:
         db.execute(f"UPDATE records SET {assignments} WHERE id=? AND owner_id=?",
                    [*fields.values(), record_id, owner_id])
+
+
+def save_scoring_run(owner_id, disease, model, threshold, scored, invalid=(), source="batch"):
+    """One transaction for a cohort run: scored (id, values, score) rows get a score and a history entry;
+    invalid (id, values, issues) rows failed the recheck and go back to 'Incomplete'."""
+    now = datetime.now(timezone.utc).isoformat()
+    where = "WHERE id=? AND owner_id=? AND disease=?"
+    with connection() as db:
+        db.executemany(f"UPDATE records SET values_json=?,issues_json=?,status='Incomplete',score=NULL,model=NULL,threshold=NULL,updated_at=? {where}",
+                       [(json.dumps(values), json.dumps(issues), now, record_id, owner_id, disease)
+                        for record_id, values, issues in invalid])
+        db.executemany(f"UPDATE records SET values_json=?,issues_json='[]',status=?,score=?,model=?,threshold=?,updated_at=? {where}",
+                       [(json.dumps(values), "Flagged" if score >= threshold else "Ready", score, model, threshold, now,
+                         record_id, owner_id, disease) for record_id, values, score in scored])
+        # INSERT ... SELECT keeps the ownership check of append_record_prediction without a query per row.
+        db.executemany(f"""INSERT INTO record_predictions(record_id,owner_id,disease,values_json,score,threshold,model,source,created_at)
+                           SELECT id,owner_id,disease,?,?,?,?,?,? FROM records {where}""",
+                       [(json.dumps(values), score, threshold, model, source, now, record_id, owner_id, disease)
+                        for record_id, values, score in scored])
 
 
 def delete_records(owner_id):

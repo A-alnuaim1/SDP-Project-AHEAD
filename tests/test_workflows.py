@@ -59,7 +59,7 @@ class ClinicalWorkflowTests(unittest.TestCase):
         record = list_records(first["id"])[0]
         self.assertFalse(list_records(second["id"]))
         update_record(second["id"], record["id"], status="Reviewed")
-        self.assertEqual(list_records(first["id"])[0]["status"], "Incomplete")
+        self.assertEqual(list_records(first["id"])[0]["status"], "Ready")
         self.assertTrue(change_password(first["id"], "doctor-passphrase-1", "new-doctor-passphrase"))
 
     def test_report_has_score_and_limitation(self):

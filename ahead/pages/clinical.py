@@ -2,20 +2,19 @@
 
 import hashlib
 import json
-from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
-from ahead.clinical_data import prepare_upload, validate_row
+from ahead.clinical_data import dob_age, prepare_upload, validate_row
 from ahead.visuals import metric
 from ahead.components import current_user, model_selector, page_header, result_card
 from ahead.config import DISEASES, pretty_label
 from ahead.reports import patient_report
 from ahead.resources import feature_summary, features, final_metrics, predict_probability, validation_results, best_model
-from ahead.storage import insert_records, list_records, update_record
+from ahead.storage import insert_records, list_records, save_scoring_run, update_record
 from ahead.screening import identify_risk_factors, individual_sensitivity
-from ahead.platform_data import append_record_prediction, record_prediction_history
+from ahead.platform_data import append_record_prediction, record_prediction_history, to_local
 
 ID_COLUMNS = ["PatientID", "patient_id", "Patient ID", "ID", "id"]
 MAX_ROWS = 5000
@@ -31,8 +30,9 @@ def _upload():
         st.error("File exceeds the 15 MB upload limit.")
         return None, None
     try:
-        frame = pd.read_csv(file) if file.name.lower().endswith(".csv") else pd.read_excel(file)
-    except (ValueError, UnicodeError, pd.errors.ParserError, OSError):
+        # Text cells keep IDs such as 00042 intact (no lost zeros or '.0'); validation parses the numbers.
+        frame = pd.read_csv(file, dtype=str) if file.name.lower().endswith(".csv") else pd.read_excel(file, dtype=str)
+    except Exception:  # corrupt, encrypted or mislabelled files fail in many parser-specific ways
         st.error("Could not read this file. Check the CSV/XLSX format.")
         return None, None
     if frame.empty or len(frame) > MAX_ROWS:
@@ -81,19 +81,31 @@ def _intake(owner_id, disease, required, stats):
 
 
 def _edit_record(record, owner_id, disease, required, stats, pipeline, model_name, threshold):
-    values = json.loads(record["values_json"])
+    values, issues = json.loads(record["values_json"]), json.loads(record["issues_json"])
     st.markdown(f"**Record {record['source_row']} · {record['patient_id']}**")
     st.caption("Edit model inputs below. Enter DOB to calculate age automatically.")
-    edited = pd.DataFrame([{"Input": f, "Value": "" if values.get(f) is None else str(values[f])} for f in required])
+    shown = {f: "" if values.get(f) is None else str(values[f]) for f in required}
+    edited = pd.DataFrame([{"Input": f, "Value": shown[f], **({"Issue": next(
+        (i.split(": ", 1)[1] for i in issues if i.startswith(f + ":")), "")} if issues else {})} for f in required])
     with st.form(f"edit_{record['id']}"):
-        table = st.data_editor(edited, hide_index=True, disabled=["Input"], width="stretch",
+        table = st.data_editor(edited, hide_index=True, disabled=["Input", "Issue"], width="stretch",
                                key=f"record_editor_{record['id']}")
-        dob = st.text_input("Date of birth (YYYY-MM-DD, optional)", value=record["dob"] or "")
+        dob = st.text_input("Date of birth (YYYY-MM-DD, optional)", value=record["dob"] or "").strip()
         submitted = st.form_submit_button("Save and validate record")
     if submitted:
         incoming = dict(zip(table["Input"], table["Value"]))
-        clean, issues = validate_row(incoming, disease, required, stats, dob or None,
-                                     datetime.fromisoformat(record['created_at']).date())
+        age_key = "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
+        reference = to_local(record['created_at']).date()
+        try:
+            old = dob_age(record["dob"], disease, stats, reference)
+        except (ValueError, TypeError):
+            old = None
+        # An entered DOB re-derives the age only while the untouched cell still holds the old DOB's age; an unreadable
+        # new DOB blanks it too, so a typo never leaves a stale age behind. An uploaded or typed age is kept, so
+        # validate_row flags a disagreement instead of silently replacing it.
+        if old is not None and dob and values.get(age_key) == old and incoming.get(age_key) == shown[age_key]:
+            incoming[age_key] = None
+        clean, issues = validate_row(incoming, disease, required, stats, dob or None, reference)
         if not issues and record['score'] is not None:
             try:
                 score = float(predict_probability(pipeline, pd.DataFrame([clean], columns=required)).iloc[0])
@@ -104,11 +116,18 @@ def _edit_record(record, owner_id, disease, required, stats, pipeline, model_nam
             update_record(owner_id, record['id'], values_json=json.dumps(clean), dob=dob or None,
                           issues_json='[]',status='Flagged' if score>=threshold else 'Ready',
                           score=score, model=model_name,threshold=threshold)
-            st.rerun()
+            _rerun_after_save()
         update_record(owner_id, record["id"], values_json=json.dumps(clean), dob=dob or None,
                       issues_json=json.dumps(issues), status="Incomplete" if issues else "Ready",
                       score=None, model=None, threshold=None)
-        st.rerun()
+        _rerun_after_save()
+
+
+def _rerun_after_save():
+    # The browser keeps the Record label it last saw until the server sets the value; with a stale label (old status)
+    # its next click would match no option and the selection would fall back to Row 1.
+    st.session_state.clinical_record_saved = True
+    st.rerun()
 
 
 def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
@@ -122,30 +141,24 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
     records = sorted((r for r in all_records if r["cohort"] == cohort), key=lambda r: r["source_row"])
     ready = [r for r in records if not json.loads(r["issues_json"]) and r["status"] not in ("Excluded", "Reviewed")]
     if st.button(f"Score {len(ready)} eligible records with {model_name}", disabled=not ready, type="primary"):
-        refreshed = []
-        for record in ready:
-            clean, issues = validate_row(json.loads(record["values_json"]), disease, required, stats, record["dob"],
-                                         datetime.fromisoformat(record['created_at']).date())
-            if issues:
-                update_record(owner_id, record["id"], values_json=json.dumps(clean),
-                              issues_json=json.dumps(issues), status="Incomplete", score=None, model=None, threshold=None)
-            else:
-                update_record(owner_id, record["id"], values_json=json.dumps(clean))
-                refreshed.append((record, clean))
-        if not refreshed:
-            st.warning("No valid records remain after rechecking dates and inputs.")
-            st.rerun()
-        frame = pd.DataFrame([values for _, values in refreshed], columns=required)
-        try:
-            scores = predict_probability(pipeline, frame)
-        except (ValueError, TypeError) as error:
+        with st.spinner(f"Checking and scoring {len(ready):,} records with {model_name}…"):
+            checked = [(r["id"], *validate_row(json.loads(r["values_json"]), disease, required, stats, r["dob"],
+                                               to_local(r["created_at"]).date())) for r in ready]
+            valid, scored, error = [(i, clean) for i, clean, issues in checked if not issues], [], None
+            if valid:
+                try:
+                    scores = predict_probability(pipeline, pd.DataFrame([clean for _, clean in valid], columns=required))
+                    scored = [(i, clean, float(score)) for (i, clean), score in zip(valid, scores)]
+                except (ValueError, TypeError) as failure:
+                    error = failure
+            # One transaction for the whole cohort; a connection per record took about a minute for 5,000 rows.
+            save_scoring_run(owner_id, disease, model_name, threshold, scored, [row for row in checked if row[2]])
+        if error:
             st.error(f"Scoring failed. Verify model inputs: {error}")
         else:
-            for (record, _), score in zip(refreshed, scores):
-                append_record_prediction(owner_id,record['id'],disease,json.loads(record['values_json']),float(score),threshold,model_name)
-                update_record(owner_id, record["id"], score=float(score), threshold=threshold, model=model_name,
-                              status="Flagged" if score >= threshold else "Ready")
-            st.rerun()
+            if not valid:
+                st.toast("No valid records remain after rechecking dates and inputs.")
+            _rerun_after_save()
     rows = [{"Row": r["source_row"], "Patient": r["patient_id"], "Status": r["status"],
              "Model score (%)": None if r["score"] is None else round(r["score"] * 100, 1),
              "Issues": "; ".join(json.loads(r["issues_json"])), "Model": r["model"] or ""}
@@ -170,10 +183,14 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
                        file_name=f"ahead_{disease}_review.csv", mime="text/csv")
 
     st.subheader("3 · Individual review")
-    selected_id = st.selectbox("Record", [r["id"] for r in records],
-                               format_func=lambda key: next(f"Row {r['source_row']} · {r['patient_id']} · {r['status']}"
-                                                     for r in records if r["id"] == key))
-    record = next(r for r in records if r["id"] == selected_id)
+    by_id, key = {r["id"]: r for r in records}, f"clinical_record_{disease}_{cohort}"
+    # A stable key keeps the doctor on this record when its status (part of the label) changes; after a save the
+    # value is set again so the browser receives the new label (see _rerun_after_save).
+    if st.session_state.pop("clinical_record_saved", False) and st.session_state.get(key) in by_id:
+        st.session_state[key] = st.session_state[key]
+    selected_id = st.selectbox("Record", list(by_id), key=key,
+                               format_func=lambda i: f"Row {by_id[i]['source_row']} · {by_id[i]['patient_id']} · {by_id[i]['status']}")
+    record = by_id[selected_id]
     issues = json.loads(record["issues_json"])
     if issues:
         st.warning("Correct these inputs before screening: " + "; ".join(issues))
@@ -188,7 +205,7 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
             (m for m in validation_results(disease) if m["model"] == record["model"]), {})
         st.download_button("Download patient PDF", patient_report(disease, record["patient_id"], values,
                            record["score"], record["threshold"], record["model"], metrics,
-                           record["status"], record["note"],
+                           record["status"] if record["status"] in ("Reviewed", "Excluded") else "", record["note"],
                            metric_source="test" if record["model"] == best_model(disease) else "validation"),
                            file_name=f"ahead_record_{record['id']}.pdf", mime="application/pdf")
         factors = identify_risk_factors(disease, values)
@@ -222,7 +239,7 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
                 st.error("Correct and score this record before marking it reviewed.")
             else:
                 update_record(owner_id, selected_id, note=note, status=action)
-                st.rerun()
+                _rerun_after_save()
 
 
 def render_clinical_dashboard():

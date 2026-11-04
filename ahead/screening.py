@@ -15,6 +15,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from ahead.clinical_data import input_bounds
 from ahead.components import (
     disclaimer, model_selector, page_header, record_screening, result_card, section_heading,
 )
@@ -80,23 +81,20 @@ def render_feature_input(stats: dict, feature: str, key: str, optional: bool = F
         return st.selectbox(label, [0, 1], index=info["mode"] or 0,
                             format_func=lambda x: names[x], key=key)
 
-    minimum, maximum, median = info["min"], info["max"], info["median"]
-    # Allow realistic values slightly outside the training range instead of hard-capping
-    # at the dataset extremes (e.g. an 85-year-old when the dataset stops at 80).
-    span = max(maximum - minimum, 1.0)
-    low = minimum - 0.25 * span if minimum < 0 else max(0.0, minimum - 0.25 * span)
-    high = maximum + 0.25 * span
+    median = info["median"]
+    # Same widened range the clinical upload accepts, so both sides score the same values.
+    low, high = input_bounds(feature, info)
 
     blank = {"value": None, "placeholder": "Needed for a score" if needed else "Optional"} \
         if optional else {}
 
     if feature.lower() == "age" or info["integer"]:
         return st.number_input(
-            label, min_value=int(np.floor(low)), max_value=int(np.ceil(high)),
+            label, min_value=low, max_value=high,
             **({"value": int(round(median))} | blank), step=1, key=key,
         )
     return st.number_input(
-        label, min_value=round(low, 2), max_value=round(high, 2), **({"value": round(median, 2)} | blank),
+        label, min_value=low, max_value=high, **({"value": round(median, 2)} | blank),
         step=0.1, key=key,
     )
 

@@ -31,23 +31,47 @@ def age_category(age, choices):
     raise ValueError("Date of birth does not match the model's age categories.")
 
 
+def dob_age(dob, disease, stats, reference_date=None):
+    """The age model input a DOB gives (years, or the matching AgeCategory for heart); None without a DOB."""
+    age = age_from_dob(dob, reference_date)
+    return age_category(age, stats["AgeCategory"]["options"]) if age is not None and disease == "heart" else age
+
+
+# Hard limits the widened range never crosses: day counts cover the past 30 days, sleep is hours per day,
+# and a BMI or serum creatinine near zero is an entry error, not a patient.
+PHYSICAL_LIMITS = {"physicalhealthdays": (0.0, 30.0), "mentalhealthdays": (0.0, 30.0), "sleephours": (1.0, 24.0),
+                   "bmi": (10.0, math.inf), "serumcreatinine": (0.2, math.inf)}
+
+
+def input_bounds(feature, info):
+    """Values a model input accepts: the training range widened by a quarter of its span, so realistic values
+    just past the dataset extremes (e.g. an 85-year-old when the data stops at 80) can still be scored."""
+    span = max(info["max"] - info["min"], 1.0)
+    floor, cap = PHYSICAL_LIMITS.get(feature.lower(), (-math.inf, math.inf))
+    low = info["min"] - 0.25 * span if info["min"] < 0 else max(0.0, info["min"] - 0.25 * span)
+    low, high = max(low, floor), min(info["max"] + 0.25 * span, cap)
+    if feature.lower() == "age" or info["integer"]:
+        return int(math.floor(low)), int(math.ceil(high))
+    return round(low, 2), round(high, 2)
+
+
 def validate_row(values, disease, required, stats, dob=None, reference_date=None):
     """Return normalized model inputs and actionable issues; never silently score an invalid row."""
     clean, issues = {}, []
     age_key = "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
     try:
-        age = age_from_dob(dob, reference_date)
-        if age is not None:
-            derived = age_category(age, stats[age_key]["options"]) if disease == "heart" else age
-            supplied = values.get(age_key)
+        derived = dob_age(dob, disease, stats, reference_date)
+        if derived is not None:
+            supplied, consistent = values.get(age_key), True
             if supplied is not None and not pd.isna(supplied) and str(supplied).strip():
                 try:
-                    consistent = str(supplied).strip().lower() == str(derived).strip().lower() if disease == 'heart' else int(float(supplied)) == age
-                except (ValueError, TypeError):
+                    consistent = str(supplied).strip().lower() == str(derived).strip().lower() if disease == 'heart' else int(float(supplied)) == derived
+                except (ValueError, TypeError, OverflowError):
                     consistent = False
                 if not consistent:
                     issues.append(f'{age_key}: entered age conflicts with DOB; verify both.')
-            values[age_key] = derived
+            if consistent:  # a conflicting entered age stays visible next to the DOB until one is corrected
+                values[age_key] = derived
     except (ValueError, TypeError):
         issues.append("Invalid date of birth; use YYYY-MM-DD.")
     for feature in required:
@@ -56,7 +80,7 @@ def validate_row(values, disease, required, stats, dob=None, reference_date=None
             issues.append(f"{feature}: missing; enter a value before scoring.")
             clean[feature] = None
             continue
-        info = stats[feature]
+        info, entered, found = stats[feature], value, len(issues)
         if info["kind"] == "number":
             if isinstance(value, str) and info.get("binary"):
                 mapping = {"yes": 1, "true": 1, "y": 1, "no": 0, "false": 0, "n": 0}
@@ -67,21 +91,25 @@ def validate_row(values, disease, required, stats, dob=None, reference_date=None
                 number = float(value)
             except (ValueError, TypeError):
                 number = float("nan")
+            low, high = input_bounds(feature, info)
             if not math.isfinite(number):
                 issues.append(f"{feature}: enter a number.")
             elif info.get("integer") and not number.is_integer():
                 issues.append(f"{feature}: enter a whole number.")
             elif info.get("binary") and number not in (0, 1):
                 issues.append(f"{feature}: enter 0 or 1.")
-            elif number < info["min"] or number > info["max"]:
-                issues.append(f"{feature}: {number:g} is outside the training range ({info['min']:g}–{info['max']:g}); verify it.")
-            clean[feature] = (int(number) if info["integer"] else number) if math.isfinite(number) else None
+            elif not low <= number <= high:
+                issues.append(f"{feature}: {number:g} is too far outside the training range for the model to score; "
+                              f"it accepts {low:g} to {high:g}.")
+            clean[feature] = int(number) if info["integer"] and number.is_integer() else number
         else:
             options = {str(option).strip().lower(): option for option in info["options"]}
-            matched = options.get(str(value).strip().lower())
-            if matched is None:
+            clean[feature] = options.get(str(value).strip().lower())
+            if clean[feature] is None:
                 issues.append(f"{feature}: choose a category from the training data.")
-            clean[feature] = matched
+        if len(issues) > found:
+            # Keep a failing value exactly as entered so the doctor sees and corrects it; never a truncated guess.
+            clean[feature] = entered
     return clean, issues
 
 
@@ -96,10 +124,10 @@ def prepare_upload(frame, disease, required, stats, id_columns, reference_date=N
     output = []
     for index, (_, row) in enumerate(frame.iterrows(), 1):
         dob = row[dob_column] if dob_column else None
-        dob = None if dob is None or pd.isna(dob) else str(dob)[:10]
+        dob = None if dob is None or pd.isna(dob) else str(dob).strip()[:10] or None
         values = {f: row[f] if f in frame.columns else None for f in required}
         values = {f: (None if pd.isna(v) else v.item() if hasattr(v, "item") else v) for f, v in values.items()}
         clean, issues = validate_row(values, disease, required, stats, dob, reference_date)
-        patient = str(row[id_column]) if id_column and pd.notna(row[id_column]) else f"Row {index}"
-        output.append({"patient_id": patient[:100], "values": clean, "dob": dob, "issues": issues})
+        patient = str(row[id_column]).strip() if id_column and pd.notna(row[id_column]) else ""
+        output.append({"patient_id": (patient or f"Row {index}")[:100], "values": clean, "dob": dob, "issues": issues})
     return output
