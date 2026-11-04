@@ -12,7 +12,7 @@ import streamlit as st
 from ahead.components import current_user, logout, pref, page_header
 from ahead.theme import APPEARANCE_OPTIONS, appearance_mode
 from ahead.storage import change_password, delete_records, delete_screenings, update_profile, update_preferences
-from ahead.platform_data import doctors_for, grant_doctor, revoke_doctor, ai_consent
+from ahead.platform_data import doctors_for, grant_doctor, revoke_doctor, ai_consent, plans
 
 
 def _row(icon: str, title: str, copy: str) -> str:
@@ -158,8 +158,12 @@ def _preferences_tab() -> None:
             st.write(f"{doctor['name']} · {doctor['email']}")
             st.checkbox('Allow sending my linked records to Gemini for optional AI summaries',value=bool(doctor['ai_allowed']),
                  key=f"ai_consent_{doctor['id']}",on_change=lambda did=doctor['id']:ai_consent(user['id'],did,st.session_state[f'ai_consent_{did}']))
-            if st.button('Remove access',key=f"revoke_{doctor['id']}"):
-                revoke_doctor(user['id'],doctor['id']);st.rerun()
+            ongoing=[p['name'] for p in plans(user['id']) if p['doctor_id']==doctor['id'] and p['status']!='stopped']
+            with st.popover('Remove access',key=f"revoke_menu_{doctor['id']}"):
+                st.write(f"{doctor['name']} will no longer see your records or manage your medication.")
+                if ongoing:st.warning('These plans will stop and cannot be restarted, even if you link this doctor again: '+', '.join(ongoing)+'. Talk to a clinician before you stop a medicine.')
+                if st.button('Remove access',key=f"revoke_{doctor['id']}",type='primary'):
+                    revoke_doctor(user['id'],doctor['id']);st.toast('Access removed.');st.rerun()
     if user := st.session_state.get("user"):
         if user["role"] == "Doctor" and st.button("Delete my saved clinical records", type="secondary"):
             delete_records(user["id"])

@@ -6,25 +6,24 @@ import streamlit as st
 
 from ahead.components import page_header
 from ahead.visuals import metric,adherence_chart
-from ahead.platform_data import dose_entries,mark_dose,notify,plans,scheduled_doses,local_today
+from ahead.platform_data import doctors_for,dose_entries,mark_dose,notify,open_doses,plans,scheduled_doses,local_today
 
 
 def refresh_medication_notifications(patient_id):
     today=local_today()
-    for dose in scheduled_doses(patient_id,today-timedelta(days=1),today):
-        if dose['status'] in ('upcoming','missed'):
-            kind='medication_due' if dose['date']==today.isoformat() else 'medication_missed'
-            notify(patient_id,kind,'Medication '+('due' if kind=='medication_due' else 'missed'),
-                   f"{dose['name']} · {dose['dosage']} · {dose['date']} {dose['time']}",'medications',
-                   f"{kind}-{dose['plan_id']}-{dose['date']}-{dose['time']}")
+    for dose in open_doses(patient_id,today-timedelta(days=1),today):
+        kind='medication_due' if dose['date']==today.isoformat() else 'medication_missed'
+        notify(patient_id,kind,'Medication '+('due' if kind=='medication_due' else 'missed'),
+               f"{dose['name']} · {dose['dosage']} · {dose['date']} {dose['time']}",'medications',
+               f"{kind}-{dose['plan_id']}-{dose['date']}-{dose['time']}")
 
 
 def render_medications():
     owner=st.session_state.user['id']
     page_header('Patient care','Medication Monitoring','Follow plans assigned by your doctor and record doses.')
-    st.info('Only your linked doctor can create or change a plan. If a dose is missed, do not double up without advice from your clinician.')
+    st.info('Only a doctor you have linked can create or change a plan, and removing a doctor’s access stops their plans. If a dose is missed, do not double up without advice from your clinician.')
     refresh_medication_notifications(owner)
-    active=plans(owner)
+    active=plans(owner);linked={d['id'] for d in doctors_for(owner)};status={p['id']:p['status'] for p in active}
     today=local_today()
     today_doses=scheduled_doses(owner,today,today)
     cols=st.columns(3)
@@ -38,6 +37,7 @@ def render_medications():
             with st.container(border=True):
                 st.write(f"**{d['name']} · {d['dosage']}**  — {d['time']}  · {d['status'].title()}")
                 st.caption(d['instructions'])
+                if status[d['plan_id']]!='active' and d['status']=='missed':st.warning(f"This plan was {status[d['plan_id']]} after this dose was due. Record it only if you already took it; do not take it now.")
                 c1,c2=st.columns(2)
                 if c1.button('Taken',key=f"taken_{d['plan_id']}_{d['time']}"):
                     try:mark_dose(owner,d['plan_id'],d['date'],d['time'],'taken');st.rerun()
@@ -53,6 +53,7 @@ def render_medications():
                 st.write(f"**{p['name']} · {p['dosage']}** — {p['status']}")
                 st.write(f"Times: {', '.join(p['times'])} · Days: {', '.join(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][d] for d in p['days'])}")
                 st.caption(f"{p['start_date']} to {p['end_date']} · {p['instructions']} · {p['notes']}")
+                if p['doctor_id'] not in linked:st.caption('The prescribing doctor no longer has access to this plan. Talk to a clinician before changing how you take this medication.')
     with tab3:
         start=today-timedelta(days=29)
         schedule=scheduled_doses(owner,start,today)

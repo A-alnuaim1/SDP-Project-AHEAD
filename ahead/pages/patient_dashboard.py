@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 from ahead.components import condition_cards, empty_state, go_to, section_heading, disclaimer
-from ahead.platform_data import lifestyle_history,get_goals,challenge_days,scheduled_doses,local_today
+from ahead.platform_data import lifestyle_history,get_goals,challenge_days,open_doses,local_today
 from ahead.storage import load_screenings
 from ahead.wellness import challenge_summary
 from ahead.visuals import summary_card,week_strip,score_ring,progress_card,category_chart,trend,COLORS
@@ -13,7 +13,7 @@ def render_patient_dashboard():
     owner=st.session_state.user['id']
     records=lifestyle_history(owner); goals=get_goals(owner); days=challenge_days(owner)
     assessments=load_screenings(owner); today=local_today(); challenge=challenge_summary(days)
-    due=[d for d in scheduled_doses(owner,today,today) if d['status'] in ('upcoming','missed')]
+    due=open_doses(owner,today,today)
     goal_count=min(len(goals),6)
     cards=[('screenings','Screenings saved',len(assessments),None,'#8E7CC3','screenings',
             'Your saved screening results' if assessments else 'Take your first screening to start your history',
