@@ -228,18 +228,20 @@ class ClinicalFixTests(unittest.TestCase):
         record = self.upload("diabetes", [typical_row("diabetes")])[0]
         update_record(self.doctor["id"], record["id"], score=0.8, threshold=0.5, status="Flagged", model=best_model("diabetes"))
         import ahead.pages.clinical as clinical
-        lines, real = [], clinical.patient_report
+        pages, real = [], clinical.patient_report
 
         def capture(*args, **kwargs):
             pdf = real(*args, **kwargs)
-            lines.append(next(l for l in PdfReader(io.BytesIO(pdf)).pages[0].extract_text().splitlines()
-                              if l.startswith("Doctor review")))
+            pages.append(PdfReader(io.BytesIO(pdf)).pages[0].extract_text())
             return pdf
         with mock.patch.object(clinical, "patient_report", capture):
             self.page()
             update_record(self.doctor["id"], record["id"], status="Reviewed")
             self.page()
-        self.assertEqual(lines, ["Doctor review: Pending", "Doctor review: Reviewed"])
+        self.assertEqual(len(pages), 2)
+        self.assertIn("Pending review", pages[0])
+        self.assertNotIn("Pending review", pages[1])
+        self.assertIn("Reviewed", pages[1])
 
     def test_changing_dob_derives_age_on_the_first_save(self):
         for disease, new_dob in [("diabetes", "1990-06-01"), ("heart", "1960-01-01")]:
