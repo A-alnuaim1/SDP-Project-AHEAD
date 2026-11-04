@@ -50,10 +50,10 @@
 .st-key-activity_log [data-testid="stButtonGroup"] button[aria-checked="true"] {background:#0E9AA7!important;border-color:#0E9AA7!important;}
 .st-key-activity_log [data-testid="stButtonGroup"] button[aria-checked="true"] * {color:#FFFFFF!important;}
 /* dashboard summary cards — the keyed container positions the button; the inner div is the visual card */
-[data-testid="stLayoutWrapper"]:has(> [class*="_summary_card"]) {flex:1 1 auto;}
-[class*="_summary_card"] {position:relative;height:100%;gap:0!important;}
-[class*="_summary_card"] > [data-testid="stElementContainer"]:has(.summary-inner) {flex:1 1 auto;}
-[class*="_summary_card"] [data-testid="stHtml"]:has(.summary-inner) {height:100%;}
+[data-testid="stLayoutWrapper"]:has(> [class*="_summary_card"]),[data-testid="stLayoutWrapper"]:has(> [class*="_summary_tile"]) {flex:1 1 auto;}
+[class*="_summary_card"],[class*="_summary_tile"] {position:relative;height:100%;gap:0!important;}
+[class*="_summary_card"] > [data-testid="stElementContainer"]:has(.summary-inner),[class*="_summary_tile"] > [data-testid="stElementContainer"]:has(.summary-inner) {flex:1 1 auto;}
+[class*="_summary_card"] [data-testid="stHtml"]:has(.summary-inner),[class*="_summary_tile"] [data-testid="stHtml"]:has(.summary-inner) {height:100%;}
 .summary-inner {height:100%;box-sizing:border-box;display:flex;flex-direction:column;padding:18px;border-radius:18px;background:color-mix(in srgb,var(--tone) 8%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--tone) 28%,var(--ahead-card));transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;}
 [class*="_summary_card"]:hover .summary-inner {transform:translateY(-3px);border-color:var(--tone);box-shadow:0 12px 26px color-mix(in srgb,var(--tone) 18%,transparent);}
 [class*="_summary_card"]:has(button:focus-visible) .summary-inner {outline:3px solid var(--tone);outline-offset:3px;}

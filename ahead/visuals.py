@@ -31,19 +31,27 @@ def metric(label, value, note='', color='#0E9AA7', icon='✦'):
     st.html(f'''<div class="visual-metric" style="--visual-color:{color}"><span class="visual-icon" aria-hidden="true">{escape(icon)}</span>
     <span class="visual-label">{escape(label)}</span><strong>{escape(str(value))}</strong><small>{escape(note)}</small></div>''')
 
-def summary_card(key, label, value, note, action, color, icon, total=None):
-    """A tinted dashboard card; the whole card is a button. Returns True when it is clicked."""
+def _summary_html(label, value, note, color, icon, total=None, action=''):
     out_of = f' <small>of {total}</small>' if total else ''
     bar = (f'<div class="summary-bar"><span style="width:{max(3, min(100, value / total * 100)):.0f}%"></span></div>'
            if total else '')
-    with st.container(key=f'{key}_summary_card'):
-        st.html(f'''<div class="summary-inner" style="--tone:{color}">
+    go = f'<div class="summary-go" aria-hidden="true"><span>{escape(action)}</span><span>→</span></div>' if action else ''
+    return f'''<div class="summary-inner" style="--tone:{color}">
 <div class="summary-icon"><img src="{icon_uri(f'dashboard/{icon}.svg')}" alt=""></div>
 <span class="summary-label">{escape(label)}</span><strong class="summary-value">{escape(str(value))}{out_of}</strong>{bar}
-<p class="summary-note">{escape(note)}</p>
-<div class="summary-go" aria-hidden="true"><span>{escape(action)}</span><span>→</span></div>
-</div>''')
+<p class="summary-note">{escape(note)}</p>{go}
+</div>'''
+
+def summary_card(key, label, value, note, action, color, icon, total=None):
+    """A tinted dashboard card; the whole card is a button. Returns True when it is clicked."""
+    with st.container(key=f'{key}_summary_card'):
+        st.html(_summary_html(label, value, note, color, icon, total, action))
         return st.button(f'{action} →', key=key, width='stretch')
+
+def summary_tile(key, label, value, note, color, icon, total=None):
+    """The same tinted card without an action, for figures that don't lead anywhere."""
+    with st.container(key=f'{key}_summary_tile'):
+        st.html(_summary_html(label, value, note, color, icon, total))
 
 def progress_card(label, amount, target, unit='', color='#0E9AA7'):
     percentage = min(100, max(0, amount / target * 100)) if target else 0
