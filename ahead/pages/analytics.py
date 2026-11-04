@@ -137,8 +137,8 @@ def render_analytics() -> None:
                     summary_tile(f"analytics_{disease}_{key}", label, value, note, colour, icon)
 
             section_heading("Explore the data", "How many records have the condition, and how each screening input is spread across the dataset.")
-            # The picker gets its own row above the right chart, so both charts start at the same height.
-            selected_feature = st.columns(2)[1].selectbox(
+            # The picker gets its own row above the charts, so both charts start at the same height.
+            selected_feature = st.columns(2)[0].selectbox(
                 "Input to explore", model_features, format_func=pretty_label, key=f"explorer_{disease}",
             )
             left, right = st.columns(2)
