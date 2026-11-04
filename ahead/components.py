@@ -6,7 +6,7 @@ navigation helpers (current user, screening history, go_to).
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
 
 import streamlit as st
@@ -103,12 +103,14 @@ def current_user() -> dict:
 
 
 def record_screening(disease: str, model_name: str, probability: float, prediction: int, threshold: float = 0.5, values=None) -> None:
-    """Append a completed screening to the session history (if the user allows it)."""
+    """Add a completed screening to the session history (if the user allows it).
+    The history is newest first, like load_screenings, and times are UTC."""
     if not pref("keep_history"):
         return
-    st.session_state.screening_history.append(
+    st.session_state.screening_history.insert(
+        0,
         {
-            "time": datetime.now(),
+            "time": datetime.now(timezone.utc),
             "disease": disease,
             "label": DISEASES[disease]["label"],
             "model": model_name,

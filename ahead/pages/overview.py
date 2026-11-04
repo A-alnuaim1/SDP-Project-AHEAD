@@ -14,6 +14,7 @@ import streamlit as st
 
 from ahead.components import condition_cards, current_user, disclaimer, empty_state, go_to, kpi_card, open_assistant, section_heading
 from ahead.config import DISEASES
+from ahead.platform_data import to_local
 from ahead.resources import best_model, final_metrics, n_samples, validation_results
 from ahead.theme import show_chart, style_figure, tokens
 
@@ -160,16 +161,19 @@ def render_overview() -> None:
             table = pd.DataFrame(
                 [
                     {
-                        "Time": item["time"].strftime("%H:%M"),
+                        "Date": to_local(item["time"].isoformat()),
                         "Condition": item["label"],
                         "Model": item["model"],
-                        "Score": f"{item['probability'] * 100:.1f}%",
+                        "Score": round(item["probability"] * 100, 1),
                         "Result": "Elevated" if item["prediction"] else "Lower risk",
                     }
-                    for item in reversed(history[-10:])
+                    for item in history[:10]
                 ]
             )
-            st.dataframe(table, width="stretch", hide_index=True)
+            # Real datetimes and numbers (not text) so sorting by a header is chronological / numeric.
+            st.dataframe(table, width="stretch", hide_index=True,
+                         column_config={"Date": st.column_config.DatetimeColumn(format="DD MMM YYYY, HH:mm"),
+                                        "Score": st.column_config.NumberColumn(format="%.1f%%")})
     else:
         with left:
             empty_state("◔", "No screenings yet",
