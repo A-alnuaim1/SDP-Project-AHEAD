@@ -15,6 +15,7 @@ from ahead.platform_data import (activity_counts,ai_consent,analytics,clock_time
     patient_screenings,plan_status,plans,save_plan,scheduled_doses,local_today,to_local)
 from ahead.resources import gemini_available,chat_reply
 from ahead.storage import list_records
+from ahead.triage import LABELS,open_urgent,track_text,triage_saved
 from ahead.visuals import summary_tile
 from ahead.theme import style_figure,show_chart
 
@@ -64,6 +65,30 @@ def _when(stamp):moment=to_local(stamp);return f'{moment.day} {moment:%b %Y, %H:
 
 
 def _result(row):return 'Flagged' if row['prediction'] else 'Not flagged'
+
+
+def _track(row):
+    """A saved assessment's track (ahead/triage.py), sorted from its saved values, score and threshold."""
+    return triage_saved(row['disease'],row.get('values_json'),row['score'],row['threshold'])
+
+
+def _track_label(row):return track_text(_track(row),'doctor')['label']
+
+
+def _track_words(result):
+    """The track for a caption: its label, then each urgent reason in the doctor's words, saying so plainly when the
+    model did not flag the result."""
+    reasons=[r['doctor'] for r in result['reasons']]
+    if reasons and result['flagged'] is False:reasons[0]=f'The model did not flag this result, but {reasons[0][:1].lower()}{reasons[0][1:]}'
+    return ' '.join([f"Track: {track_text(result,'doctor')['label']}.",*reasons])
+
+
+def _urgent_now(assessments):
+    """Linked patients with an urgent result that still stands (triage.open_urgent, as on the patient's own home): a later
+    screening clears it only when it re-entered the values behind it."""
+    by_owner={}
+    for a in assessments:by_owner.setdefault(a['owner_id'],[]).append(a)   # newest first
+    return sum(bool(open_urgent(rows)) for rows in by_owner.values())
 
 
 def _input(disease,key,value,blank=BLANK):
@@ -123,7 +148,7 @@ def _overview(doctor_id):
     people,assessments=analytics(doctor_id)
     if not people:st.info(NO_PATIENTS);return
     today=local_today();days=[_day(a['created_at']) for a in assessments];active,returners,activity=activity_counts(doctor_id)
-    within=lambda n:sum(d>today-timedelta(days=n) for d in days)
+    within=lambda n:sum(d>today-timedelta(days=n) for d in days);urgent=_urgent_now(assessments)
     _tiles('intel_people',[('Linked patients',len(people),'Shared their records with you under Care team access','#8E7CC3','patients'),
         ('Active (30 days)',active,'Used AHEAD at least once in the last 30 days','#0E9AA7','activity'),
         ('Returning',returners,'Signed in on 2+ separate occasions','#2E9477','returning'),
@@ -132,7 +157,8 @@ def _overview(doctor_id):
     _tiles('intel_saved',[('Today',within(1),'Saved today (local time)','#C98F1E','calendar'),
         ('Last 7 days',within(7),'Saved in the last 7 days, today included','#8E7CC3','scored'),
         ('Last 30 days',within(30),'Saved in the last 30 days, today included','#0E9AA7','review'),
-        ('Flagged',sum(bool(a['prediction']) for a in assessments),'At or above the model threshold, all time','#C9706E','flagged')])
+        ('Flagged',sum(bool(a['prediction']) for a in assessments),'At or above the model threshold, all time'
+         +(f" · {urgent} patient{'s'*(urgent!=1)} urgent now" if urgent else ''),'#C9706E','flagged')])
     if assessments:
         by_condition=pd.DataFrame(Counter(_label(a['disease']) for a in assessments).items(),columns=['Condition','Assessments'])
         results=pd.DataFrame(Counter(_result(a) for a in assessments).items(),columns=['Result','Assessments'])
@@ -146,7 +172,7 @@ def _overview(doctor_id):
                         else 'Every assessment your linked patients saved, newest first.')
         who=_names(people)
         st.dataframe(pd.DataFrame([{'Date':to_local(a['created_at']),'Patient':who[a['owner_id']],'Condition':_label(a['disease']),'Model':model_label(a['model']),
-            'Score (%)':round(a['score']*100,1),'Result':_result(a)} for a in assessments[:15]]),hide_index=True,width='stretch',column_config=LOCAL_TIME)
+            'Score (%)':round(a['score']*100,1),'Result':_result(a),'Track':_track_label(a)} for a in assessments[:15]]),hide_index=True,width='stretch',column_config=LOCAL_TIME)
     else:st.info('Your linked patients have not saved any disease assessments yet. The charts and the recent list appear after the first one.')
     section_heading('Patient activity · last 30 days','Sign-ins, saved assessments, meals, lifestyle check-ins, challenge days and dose logs from linked patients.')
     if activity:
@@ -174,8 +200,10 @@ def _disease(doctor_id):
         color_discrete_sequence=CHART),models['Assessments'].max(),'x').update_yaxes(title=None)))
     section_heading(f"{info['label']} assessments",'Newest first, across your linked patients.')
     st.dataframe(pd.DataFrame([{'Date':to_local(a['created_at']),'Patient':who[a['owner_id']],'Score (%)':round(a['score']*100,1),
-        'Threshold (%)':round(a['threshold']*100,1),'Result':_result(a),'Model':model_label(a['model'])} for a in rows]),hide_index=True,width='stretch',column_config=LOCAL_TIME)
-    st.caption('The models output flagged/not flagged at their threshold, not Low/Medium/High categories.'
+        'Threshold (%)':round(a['threshold']*100,1),'Result':_result(a),'Track':_track_label(a),'Model':model_label(a['model'])} for a in rows]),hide_index=True,width='stretch',column_config=LOCAL_TIME)
+    st.caption('The models output flagged/not flagged at their threshold, not Low/Medium/High categories. Track also applies '
+               f"the urgent cut-offs: a result is {LABELS['urgent']['doctor'][0]} when an entered value is already in a range used when diagnosing a "
+               'condition, whatever the score.'
                +(' For diabetes, some models use a lower threshold when HbA1c or blood glucose was left blank; '
                  'the Threshold (%) column shows the value applied.' if disease=='diabetes' else ''))
 
@@ -189,7 +217,7 @@ def _records(doctor_id):
     if not rows:st.info('No stored disease assessments for this patient.');return
     section_heading('Saved assessments','Newest first. Each one stays as it was saved; a new assessment never overwrites it.')
     st.dataframe(pd.DataFrame([{'ID':r['id'],'Date':to_local(r['created_at']),'Condition':_label(r['disease']),'Model':model_label(r['model']),'Score (%)':round(r['score']*100,1),
-        'Threshold (%)':round(r['threshold']*100,1),'Result':_result(r)} for r in rows]),hide_index=True,width='stretch',column_config=LOCAL_TIME)
+        'Threshold (%)':round(r['threshold']*100,1),'Result':_result(r),'Track':_track_label(r)} for r in rows]),hide_index=True,width='stretch',column_config=LOCAL_TIME)
     if len(rows)>1:
         section_heading('Score history','Scores are compared only within the same condition and model.')
         # Whole minutes: one shared minute is a single date value, which Plotly zooms to millisecond ticks.
@@ -214,7 +242,8 @@ def _records(doctor_id):
     selected=saved[st.selectbox('Open historical assessment',list(saved),format_func=lambda i:f"{_when(saved[i]['created_at'])} · {_label(saved[i]['disease'])} · ID {i}")]
     values=json.loads(selected.get('values_json') or '{}')
     if values:
-        st.caption(f"{_label(selected['disease'])} · {model_label(selected['model'])} · score {selected['score']:.1%} against a {selected['threshold']:.1%} threshold · {_result(selected)}")
+        st.caption(f"{_label(selected['disease'])} · {model_label(selected['model'])} · score {selected['score']:.1%} against a {selected['threshold']:.1%} threshold · "
+                   f"{_result(selected)} · {_track_words(_track(selected))}")
         st.dataframe(pd.DataFrame([{'Input':pretty_label(k),'Value':_input(selected['disease'],k,v)} for k,v in values.items()]),hide_index=True,width='stretch')
     else:st.caption('This earlier assessment predates input-history storage; its values are unavailable.')
     st.caption('Historical assessments remain separate; making a new prediction does not overwrite them.')

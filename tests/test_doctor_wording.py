@@ -114,7 +114,9 @@ class DoctorWordingTests(unittest.TestCase):
         self.assertIn("No score history is shown for doctor accounts", text)
         self.assertEqual(len(at.subheader), 0)
 
-        lower = self.page(self.doctor, "screenings", active_screening="kidney", last_results=scored("kidney", 0, 0.1))
+        lower_result = scored("kidney", 0, 0.1)   # the typical kidney row is urgent (ACR, HbA1c and FBS), so clear it
+        lower_result["kidney"]["values"].update(GFR=75, ACR=10, HbA1c=5.4, FastingBloodSugar=90)
+        lower = self.page(self.doctor, "screenings", active_screening="kidney", last_results=lower_result)
         text = self.text(lower)
         self.assertIn("This does not rule out disease or replace routine screening for the patient.", text)
         self.assertIn(screening.DOCTOR_NEXT_STEPS["kidney"][0][0][0], text)

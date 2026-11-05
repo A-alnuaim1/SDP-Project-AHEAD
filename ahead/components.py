@@ -14,6 +14,7 @@ import streamlit as st
 from ahead.config import DISCLAIMER_TEXT, DISEASES, ROLE_DOCTOR, ROLE_PATIENT, model_label
 from ahead.resources import available_models, best_model, decision_threshold, features, icon_uri, load_pipeline, model_reason
 from ahead.storage import save_screening
+from ahead.triage import track_text
 
 
 # =============================================================================
@@ -243,6 +244,61 @@ def result_card(prediction: int, probability: float, disease_label: str, model_n
 </div>
 """
     )
+
+
+# =============================================================================
+# SCREENING TRACKS (ahead/triage.py sorts; these draw the track the same way on every page)
+# =============================================================================
+
+# CSS class per track: .track-panel.<class> and .track-pill.<class> in redesign.css.
+TRACK_CLASS = {"urgent": "urgent", "at_risk": "at-risk", "not_flagged": "clear", "no_score": "none"}
+_TRACK_ICON = {"urgent": "flagged", "at_risk": "scored", "not_flagged": "review"}
+
+
+def track_pill_html(track, audience: str = "patient", short: bool = True) -> str:
+    """
+    The track as a small tinted pill for tables and rows: a triage() result or a bare track name. Shows the short
+    label ('Urgent') unless short=False; the full label is the pill's tooltip. The text is escaped.
+    """
+    text = track_text(track, audience)
+    name = track["track"] if isinstance(track, dict) else track
+    return (f'<span class="track-pill {TRACK_CLASS[name]}" title="{escape(text["label"])}">'
+            f'{escape(text["short"] if short else text["label"])}</span>')
+
+
+def track_panel_html(result: dict, audience: str = "patient", note: str = "") -> str:
+    """
+    The track panel's HTML (see track_panel); empty for a result with no score and no urgent rule. Everything shown
+    is escaped, including the reasons and *note*.
+    """
+    track = result["track"]
+    if track == "no_score":
+        return ""
+    text = track_text(result, audience)
+    icon = (f'<div class="summary-icon" aria-hidden="true">'
+            f'<img src="{icon_uri(f"dashboard/{_TRACK_ICON[track]}.svg")}" alt=""></div>')
+    extra = f'<p class="track-panel-note">{escape(note)}</p>' if note else ""
+    if track == "not_flagged":   # calm and short: one line
+        return (f'<div class="track-panel clear">{icon}<div class="track-panel-body">'
+                f'<p class="track-panel-summary"><strong class="track-panel-title">{escape(text["label"])}.</strong> '
+                f'{escape(text["summary"])}</p>{extra}</div></div>')
+    reasons = "".join(f"<li>{escape(reason[audience])}</li>" for reason in result["reasons"])
+    reasons = f'<ul class="track-panel-reasons">{reasons}</ul>' if reasons else ""
+    return (f'<div class="track-panel {TRACK_CLASS[track]}">{icon}<div class="track-panel-body">'
+            f'<strong class="track-panel-title">{escape(text["label"])}</strong>'
+            f'<p class="track-panel-summary">{escape(text["summary"])}</p>{reasons}{extra}</div></div>')
+
+
+def track_panel(result: dict, audience: str = "patient", note: str = "") -> bool:
+    """
+    A triage() result as a tinted panel in the dashboard style: urgent in the danger tone with its reasons as a short
+    list, at risk in the warning tone, not flagged as one calm line in the success tone. A result with no score and
+    no urgent rule draws nothing. *note* adds one line under the summary (escaped). Returns True when drawn.
+    """
+    body = track_panel_html(result, audience, note)
+    if body:
+        st.html(body)
+    return bool(body)
 
 
 # =============================================================================

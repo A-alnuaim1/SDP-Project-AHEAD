@@ -3,7 +3,8 @@ ahead/pages/overview.py
 =======================
 The signed-in home page. Patients get their personal dashboard; doctors get a
 clinician dashboard built from consent-linked patients: summary cards, the
-patients who need a look, quick screening and the screenings they ran.
+patients who need a look (urgent results first, sorted by ahead/triage.py),
+quick screening and the screenings they ran.
 """
 
 import re
@@ -14,10 +15,12 @@ from html import escape
 import pandas as pd
 import streamlit as st
 
-from ahead.components import condition_cards, current_user, disclaimer, go_to, markdown_literal, open_assistant, section_heading
+from ahead.components import (condition_cards, current_user, disclaimer, go_to, markdown_literal, open_assistant, section_heading,
+                              track_pill_html)
 from ahead.config import DISEASES, model_label
 from ahead.platform_data import analytics, local_now, local_today, plans, scheduled_doses, to_local
 from ahead.resources import icon_uri
+from ahead.triage import TRACKS, triage_saved
 from ahead.visuals import summary_card
 
 HONORIFIC = re.compile(r"^(?:(?:dr|doctor|prof|mr|mrs|ms)(?:\.\s*|\s+|$))+", re.IGNORECASE)
@@ -68,16 +71,23 @@ def _plural(count: int, word: str) -> str:
 
 
 def _care_snapshot(doctor_id: int) -> dict:
-    """Linked patients, recent assessment counts and the patients needing a look, newest first."""
+    """
+    Linked patients, recent assessment counts and the patients needing a look: urgent first, then newest. A patient
+    needs a look for a flagged or urgent result in the last 30 days (sorted from the saved values, score and
+    threshold, so an urgent value counts even when the model did not flag it) or a missed dose today.
+    """
     people, assessments = analytics(doctor_id)
     today = local_today()
     rows, week, flagged = {}, 0, 0
-    for a in assessments:  # newest first, so each patient's first flag is their latest
+    for a in assessments:  # newest first
         moment = to_local(a["created_at"]).replace(tzinfo=None)
         week += moment.date() > today - timedelta(days=7)
-        if a["prediction"] and moment.date() > today - timedelta(days=30):
-            flagged += 1
-            rows.setdefault(a["owner_id"], {"flags": [], "doses": []})["flags"].append((moment, a))
+        if moment.date() <= today - timedelta(days=30):
+            continue
+        flagged += bool(a["prediction"])
+        track = triage_saved(a["disease"], a["values_json"], a["score"], a["threshold"])
+        if a["prediction"] or track["urgent"]:
+            rows.setdefault(a["owner_id"], {"flags": [], "doses": []})["flags"].append((moment, a, track))
     missed = 0
     for p in people:
         # Only this doctor's active plans, as in Medication Monitoring; doses are read only when one exists.
@@ -88,26 +98,41 @@ def _care_snapshot(doctor_id: int) -> dict:
             missed += len(doses)
             rows.setdefault(p["id"], {"flags": [], "doses": []})["doses"] = doses
     names = {p["id"]: p["name"] or p["email"] for p in people}
-    items = [{"id": pid, "name": names[pid], **row,
-              "latest": max([m for m, _ in row["flags"][:1]] + [datetime.fromisoformat(f"{d['date']}T{d['time']}") for d in row["doses"]])}
+    for row in rows.values():  # the row leads with the most pressing result, the newest one on that track
+        row["flags"].sort(key=lambda flag: TRACKS.index(flag[2]["track"]))
+    items = [{"id": pid, "name": names[pid], **row, "urgent": bool(row["flags"]) and row["flags"][0][2]["urgent"],
+              "latest": max([m for m, *_ in row["flags"]] + [datetime.fromisoformat(f"{d['date']}T{d['time']}") for d in row["doses"]])}
              for pid, row in rows.items() if pid in names]
-    items.sort(key=lambda item: item["latest"], reverse=True)
+    items.sort(key=lambda item: (item["urgent"], item["latest"]), reverse=True)
     return {"people": people, "items": items, "week": week, "flagged": flagged, "missed": missed,
-            "flagged_ids": [i["id"] for i in items if i["flags"]], "missed_ids": [i["id"] for i in items if i["doses"]]}
+            "flagged_ids": [i["id"] for i in items if any(a["prediction"] for _, a, _ in i["flags"])],
+            "review_ids": [i["id"] for i in items if i["flags"]], "urgent_ids": [i["id"] for i in items if i["urgent"]],
+            "missed_ids": [i["id"] for i in items if i["doses"]]}
+
+
+def _reason(track: dict) -> str:
+    """The first urgent reason in the doctor's words, saying so plainly when the model did not flag the result."""
+    text = track["reasons"][0]["doctor"]
+    return f"The model did not flag this result, but {text[:1].lower()}{text[1:]}" if track["flagged"] is False else text
 
 
 def _attention_row(item: dict, today) -> None:
     lines = []
     if item["flags"]:
-        moment, a = item["flags"][0]
+        moment, a, track = item["flags"][0]
         label = DISEASES.get(a["disease"], {}).get("label", a["disease"].replace("_", " ").title())
-        more = f" · {len(item['flags']) - 1} more flagged" if len(item["flags"]) > 1 else ""
+        others = Counter("urgent" if t["urgent"] else "flagged" for *_, t in item["flags"][1:])
+        more = "".join(f" · {others[word]} more {word}" for word in ("urgent", "flagged") if others[word])
         lines.append(f"{label} · {a['score'] * 100:.0f}% · {_when(moment, today)}{more}")
+        if track["urgent"]:
+            lines.append(_reason(track))
     for name, count in Counter(d["name"] for d in item["doses"]).items():
         lines.append(f"{name} · {_plural(count, 'dose')} missed today")
-    pills = ('<span class="attention-pill flag">Flagged</span>' if item["flags"] else "") + (
-        '<span class="attention-pill dose">Missed doses</span>' if item["doses"] else "")
-    tone = "flag" if item["flags"] else "dose"
+    # The shared track pill (the same words as every other surface): Urgent, or At risk for a flag with no urgent value.
+    flag = (track_pill_html("urgent", "doctor") if item["urgent"] else
+            track_pill_html("at_risk", "doctor") if item["flags"] else "")
+    pills = flag + ('<span class="attention-pill dose">Missed doses</span>' if item["doses"] else "")
+    tone = "urgent" if item["urgent"] else "flag" if item["flags"] else "dose"
     with st.container(key=f"attention_row_{tone}_{item['id']}", horizontal=True, vertical_alignment="center"):
         st.html(
             f"""
@@ -181,11 +206,13 @@ def _render_doctor_home() -> None:
     def only(ids):
         return ids[0] if len(ids) == 1 else None
 
+    urgent = len(care["urgent_ids"])
     cards = [
         ("patients", "Linked patients", len(people), "#8E7CC3",
          "Sharing their records with you" if people else "No patients linked yet", "Open overview", "Overview", None),
-        ("flagged", "Flagged · 30 days", care["flagged"], "#C9706E", across(care["flagged_ids"], "No flagged results"),
-         "Review records", "Patient Records & History", only(care["flagged_ids"])),
+        ("flagged", "Flagged · 30 days", care["flagged"], "#C9706E",
+         across(care["flagged_ids"], "No flagged results") + (f" · {urgent} urgent" if urgent else ""),
+         "Review records", "Patient Records & History", only(care["review_ids"])),
         ("doses", "Missed doses today", care["missed"], "#C98F1E", across(care["missed_ids"], "All caught up today"),
          "Medication monitoring", "Medication Monitoring", only(care["missed_ids"])),
         ("activity", "Assessments · 7 days", care["week"], "#2E9477",
@@ -197,14 +224,16 @@ def _render_doctor_home() -> None:
                 _focus(tab, patient)
 
     # ------------------------------------------------------------------ attention list
-    section_heading("Needs your attention", "Flagged results from the last 30 days and missed doses from linked patients.")
+    section_heading("Needs your attention", "Urgent and flagged results from the last 30 days, urgent first, and missed doses "
+                    "from linked patients.")
     if not people:
         _calm_card("patients", "No linked patients yet",
                    "A patient links to you by adding your doctor email under Settings → Preferences → Care team access. "
-                   "Their flagged results and missed doses then appear here.", "neutral")
+                   "Their urgent and flagged results and missed doses then appear here.", "neutral")
     elif not items:
         _calm_card("review", "Nothing needs your attention",
-                   f"No flagged results in the last 30 days and no missed doses today across {_plural(len(people), 'linked patient')}.")
+                   f"No urgent or flagged results in the last 30 days and no missed doses today across "
+                   f"{_plural(len(people), 'linked patient')}.")
     else:
         for item in items[:ATTENTION_ROWS]:
             _attention_row(item, today)

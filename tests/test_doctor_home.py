@@ -93,7 +93,7 @@ class DoctorHomeTests(unittest.TestCase):
         self.assertNotIn('Cara',html);self.assertNotIn('Dan Calm',html)
         # Newest first: Amy's flag is from just now, Ben's dose was due at 00:00.
         self.assertLess(html.index('Amy &lt;Lee&gt;'),html.index('Ben Cole'))
-        self.assertEqual((html.count('attention-pill flag">Flagged'),html.count('attention-pill dose">Missed doses')),(1,1))
+        self.assertEqual((html.count('track-pill at-risk" title="At risk">At risk'),html.count('attention-pill dose">Missed doses')),(1,1))
         opens={k for k in self.keys(at) if k and k.startswith('home_open_')}
         self.assertEqual(opens,{f"home_open_{amy['id']}",f"home_open_{ben['id']}"})
         # Each button names its patient, so a screen reader does not hear "Open, Open".

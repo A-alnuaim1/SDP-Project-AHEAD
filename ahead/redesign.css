@@ -82,7 +82,7 @@
 .st-key-home_hero .st-key-hero_upload button:hover {background:rgba(255,255,255,.18)!important;border-color:#FFFFFF!important;color:#FFFFFF!important;}
 /* doctor home "Needs your attention": one tinted row per patient; the row wraps on phones and the Open button stays visible */
 [class*="st-key-attention_row_"] {--tone:var(--ahead-danger);padding:12px 16px!important;border-radius:16px;gap:10px 14px!important;align-items:center!important;background:color-mix(in srgb,var(--tone) 6%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--tone) 26%,var(--ahead-card));border-inline-start:4px solid var(--tone);}
-[class*="st-key-attention_row_dose"] {--tone:var(--ahead-warning);}
+[class*="st-key-attention_row_flag"],[class*="st-key-attention_row_dose"] {--tone:var(--ahead-warning);}   /* at risk and missed doses are amber; urgent stays red */
 [class*="st-key-attention_row_"] > [data-testid="stElementContainer"]:has(.attention-main) {flex:1 1 280px!important;min-width:0!important;width:auto!important;}
 [class*="st-key-attention_row_"] > [data-testid="stElementContainer"]:has(.stButton) {flex:0 0 auto!important;width:auto!important;margin-inline-start:auto;}
 .attention-main {display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;}
@@ -218,3 +218,23 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible 
 [data-testid="stMain"] .st-key-score_change [data-testid="stMetricLabel"] p {font-size:.84rem!important;font-weight:700;color:color-mix(in srgb,var(--tone) 55%,var(--ahead-title))!important;}
 [data-testid="stMain"] .st-key-score_change [data-testid="stMetricValue"] {font-size:1.7rem;font-weight:760;}
 [data-testid="stPopoverBody"] [class*="st-key-plan_stop_"] p {color:var(--ahead-text)!important;}
+/* screening tracks (ahead/triage.py): the panel under a result and pills other pages reuse in tables and rows; tokens only, so light and dark both read (text 5.2:1 or more in both) */
+.track-panel {--tone:var(--ahead-success);display:flex;align-items:flex-start;gap:14px;margin:14px 0;padding:16px 18px;border-radius:18px;background:color-mix(in srgb,var(--tone) 8%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--tone) 28%,var(--ahead-card));border-inline-start:4px solid var(--tone);}
+.track-panel.urgent {--tone:var(--ahead-danger);}
+.track-panel.at-risk {--tone:var(--ahead-warning);}
+.track-panel.clear {align-items:center;padding:12px 16px;}
+.track-panel .summary-icon {flex:none;}
+.track-panel.clear .summary-icon {width:32px;height:32px;border-radius:10px;}
+.track-panel.clear .summary-icon img {width:17px;height:17px;}
+.track-panel-body {flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;}
+.track-panel-title {font-size:1rem;font-weight:740;line-height:1.3;color:color-mix(in srgb,var(--tone) 55%,var(--ahead-title));}
+.track-panel.clear .track-panel-title {font-size:inherit;}
+.track-panel-summary,.track-panel-note {margin:0;font-size:.84rem;line-height:1.55;color:var(--ahead-text);overflow-wrap:anywhere;}
+.track-panel-note {font-size:.78rem;}
+.track-panel-reasons {margin:6px 0 0;padding-inline-start:20px;display:grid;gap:6px;font-size:.82rem;line-height:1.5;color:var(--ahead-text);}
+.track-panel-reasons li::marker {color:var(--tone);}
+.track-pill {--pill:var(--ahead-muted);display:inline-block;font-size:.74rem;font-weight:700;line-height:1.4;padding:3px 10px;border-radius:999px;white-space:nowrap;background:color-mix(in srgb,var(--pill) 14%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--pill) 34%,var(--ahead-card));color:color-mix(in srgb,var(--pill) 55%,var(--ahead-title));}
+.track-pill.urgent {--pill:var(--ahead-danger);}
+.track-pill.at-risk {--pill:var(--ahead-warning);}
+.track-pill.clear {--pill:var(--ahead-success);}
+@media (max-width:700px) {.track-panel {padding:14px;gap:12px;}}

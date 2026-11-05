@@ -20,6 +20,7 @@ from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, KeepTogether, 
 
 from ahead.config import DISEASES, GENDER_CODED_FIELDS, MODEL_NAMES, pretty_label
 from ahead.resources import feature_summary
+from ahead.triage import ADULTS_ONLY, RULES, TRACKS, number_text, track_text
 
 PAGE_W, PAGE_H = A4
 MARGIN, BAND_H, SLIM_H, FOOTER_Y, BOTTOM = 40, 62, 30, 28, 56
@@ -43,6 +44,10 @@ WARNING, WARNING_SOFT, WARNING_INK = HexColor("#C98F1E"), HexColor("#FFF6E0"), H
 # Outcome tones: (fill, ink, tint, outline)
 FLAGGED = HexColor("#C75D5D"), HexColor("#A63F3F"), HexColor("#FCEDED"), HexColor("#F0CFCF")
 CLEAR = HexColor("#2E9477"), HexColor("#1D7259"), HexColor("#E8F5EF"), HexColor("#C5E5D7")
+# The "Next step" band's tones per track, the PDF's danger, warning and success (ahead/triage.py TONES).
+TRACK_TONES = {"urgent": FLAGGED, "at_risk": (WARNING, WARNING_INK, WARNING_SOFT, HexColor("#F0DDB0")),
+               "not_flagged": CLEAR}
+NEXT_STEP = "NEXT STEP"
 FLUSH = [("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
          ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0),
          ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]
@@ -56,22 +61,26 @@ ST = {"id_label": _style(7.8, 10.2, MUTED), "id": _style(9, 11.4, TITLE), "id_b"
       "label": _style(8.4, 10.6), "value": _style(8.4, 10.6, TITLE, "Helvetica-Bold"), "caveat": _style(8.2, 10.6),
       "def": _style(7.8, 9.8, MUTED), "box_title": _style(8.6, 11, TITLE, "Helvetica-Bold"), "box": _style(8.4, 10.8),
       "factor": _style(8.4, 10.6, TITLE), "note": _style(9, 12, TITLE), "note_by": _style(7.6, 9.8, MUTED),
-      "item": _style(8.6, 11.2), "panel": _style(8, 10.2), "unrecorded": _style(8.4, 10.6, MUTED)}
+      "item": _style(8.6, 11.2), "panel": _style(8, 10.2), "unrecorded": _style(8.4, 10.6, MUTED),
+      "band": _style(8.6, 11.2), "reason": _style(8.4, 10.8), "band_tight": _style(8.2, 10.4),
+      "reason_tight": _style(8, 10)}
 
 
 def patient_report(disease, patient_id, values, score, threshold, model, metrics, status="", note="", metric_source="test",
                    metric_scope="", usual_threshold=None, metric_caveat="", *, audience="doctor", name="", reviewer="",
-                   reviewed_at=None, source="", factors=(), generated_at=None):
+                   reviewed_at=None, source="", factors=(), generated_at=None, track=None):
     """The screening summary as PDF bytes: one A4 page whenever it fits. audience="patient" speaks to the patient
     and leaves out the review status; status=None leaves it out of a doctor's copy too (a session screening has no
     review or saved record, so patient_id is shown as the screening type). Every keyword-only extra is optional and
-    its row is omitted when absent."""
+    its row is omitted when absent. track: ahead.triage.triage() for this same result (disease, score, threshold),
+    drawn as a "Next step" band under the result panel in the audience's words."""
     if _blank(score):
         raise ValueError("A report needs a model score; without one it would read as Not flagged.")
     audience = str(audience).strip().lower()
     if audience not in ("doctor", "patient"):   # a guess could hand the doctor's copy, note included, to a patient
         raise ValueError(f"audience must be 'doctor' or 'patient', not {audience!r}")
     patient, stats, metrics = audience == "patient", _stats(disease), metrics or {}
+    rules = {rule.feature: rule for rule in RULES.get(disease, ())}
     usual = None if _blank(usual_threshold) else _clamp(usual_threshold)
     threshold = _clamp(threshold) if not _blank(threshold) else usual if usual is not None else 0.5
     name = _short(name)
@@ -82,12 +91,14 @@ def patient_report(disease, patient_id, values, score, threshold, model, metrics
         status=_text(status).lower(), review=status is not None and not patient, reviewer=_short(reviewer),
         source=_short(source), reviewed_at=_when(reviewed_at), generated=_when(generated_at) or _when(datetime.now(DUBAI)),
         score=_clamp(score), threshold=threshold, usual=usual, model=_model_name(model),
-        values=[(_short(_sentence(pretty_label(k)), 80), _shown(k, v, stats.get(k, {}))) for k, v in (values or {}).items()],
+        values=[(_short(_sentence(pretty_label(k)), 80), _shown(k, v, stats.get(k, {}), rules.get(k)))
+                for k, v in (values or {}).items()],
         factors=[_short(f) for f in factors if not _blank(f)], note="" if patient else _text(note),
         recall=_metric(metrics, "recall_disease"), precision=_metric(metrics, "precision_disease"),
         source_set=_text(metric_source) or "test", scope=_text(metric_scope).lstrip(", "), caveat=_text(metric_caveat),
-        gap=GAP, rows=2.6)
+        gap=GAP, rows=2.6, band="full")
     r.flagged, r.lowered = r.score >= threshold, usual is not None and threshold < usual - 1e-9
+    r.track = _track(track, disease, r.flagged, audience)
     r.shown_score, r.shown_threshold = _pct(r.score), _pct(threshold)
     if not r.flagged and r.shown_score == r.shown_threshold:   # 49.96% must not print as 50.0% "below" 50.0%
         r.shown_threshold = _pct(threshold, 2)
@@ -192,9 +203,10 @@ def _sentence(label):
     return re.sub(r"(?<=[ -])[A-Z][a-z]+\b", lambda m: m.group().lower(), label)
 
 
-def _shown(feature, value, info):
+def _shown(feature, value, info, rule=None):
     """An entered value as the patient form shows it, NOT_RECORDED for the dataset's own "No Info" answer, or None
-    when it was left blank."""
+    when it was left blank. A value an urgent rule reads (rule, from ahead/triage.py) keeps the Next step band's two
+    decimals, so the table never rounds it onto or across its cut-off (eGFR 59.96 is not 60)."""
     if _blank(value) or (info.get("kind") != "category" and str(value).strip().lower() in BLANK_MARKERS):
         return None
     if isinstance(value, bool) or type(value).__name__ == "bool_":
@@ -213,9 +225,38 @@ def _shown(feature, value, info):
         return (("Male", "Female") if feature in GENDER_CODED_FIELDS else ("No", "Yes"))[int(number)]
     if number.is_integer():
         return str(int(number))
+    if rule is not None:   # in full when two decimals would still cross the cut-off (59.996), as the band prints it
+        text = number_text(number)
+        return text if rule.trips(float(text)) == rule.trips(number) else repr(number)
     # BMI 31.2, HbA1c 6.4, creatinine 1.23, and two significant figures for a tiny value (0.0049) so it isn't "0".
     places = 1 if abs(number) >= 10 else 2 if abs(number) >= 0.01 else min(6, 1 - math.floor(math.log10(abs(number))))
     return f"{round(number, places) + 0.0:.{places}f}".rstrip("0").rstrip(".")   # + 0.0 turns -0.0 into 0.0
+
+
+def _track(track, disease, flagged, audience):
+    """The band's words from a triage() result, or None for no band. A track sorted for another result would
+    contradict the panel above it (Not flagged over an At risk band), so it is refused rather than printed."""
+    if track is None:
+        return None
+    if not isinstance(track, dict) or track.get("track") not in TRACKS:
+        raise ValueError("track must be the result of ahead.triage.triage() for this screening.")
+    if track.get("disease") != disease or track.get("flagged") != flagged:
+        raise ValueError("track was sorted for a different result: pass triage() with this report's score and "
+                         "threshold.")
+    text, reasons = track_text(track, audience), track.get("reasons") or ()
+    return SimpleNamespace(name=track["track"], label=_text(text["label"]), summary=_text(text["summary"]),
+                           reasons=[SimpleNamespace(words=_text(reason[audience]), line=_reason_line(reason))
+                                    for reason in reasons],
+                           values=sum(reason.get("kind") != ADULTS_ONLY for reason in reasons))
+
+
+def _reason_line(reason):
+    """(label, value, cut-off) for the band's short forms, or None for a reason that keeps its words there: blood
+    pressure (the patient's emergency-care line) and age (why a flagged child needs a doctor)."""
+    if reason.get("kind") in ("blood_pressure", ADULTS_ONLY):
+        return None
+    parts = tuple(_text(reason.get(key)) for key in ("label", "value_text", "cut_off_text"))
+    return parts if all(parts) else None
 
 
 def _model_name(model):
@@ -246,9 +287,13 @@ def _when(value):
 # Drawing helpers and flowables
 # =============================================================================
 
+def _tracked_width(text, size, space):
+    return stringWidth(text, "Helvetica-Bold", size) + space * max(len(text) - 1, 0)
+
+
 def _tracked(c, x, y, text, size, space, color, align="left"):
     """Letter-spaced bold caps; returns the drawn width."""
-    width = stringWidth(text, "Helvetica-Bold", size) + space * max(len(text) - 1, 0)
+    width = _tracked_width(text, size, space)
     x -= width if align == "right" else 0
     c.saveState()   # char spacing is graphics state: keep it from leaking into later text
     t = c.beginText(x, y)
@@ -287,6 +332,47 @@ def _logo(c, x, y, size):
         for point in points[1:]:
             path.lineTo(*point)
         c.drawPath(path, stroke=1, fill=0)
+    c.restoreState()
+
+
+def _track_icon(c, x, y, size, track, color):
+    """The web panel's icon for a track (assets/icons/dashboard: flag, gauge, clipboard check, 24x24 viewBox) in
+    white on a tone tile, drawn with canvas paths."""
+    c.saveState()
+    c.setFillColor(color)
+    c.roundRect(x, y, size, size, size * 0.3, stroke=0, fill=1)
+    c.translate(x + size * 0.225, y + size * 0.775)   # the icon fills the middle 55%, SVG's y axis pointing down
+    c.scale(size * 0.55 / 24, -size * 0.55 / 24)
+    c.setStrokeColor(WHITE)
+    c.setLineWidth(2)
+    c.setLineCap(1)
+    c.setLineJoin(1)
+    p = c.beginPath()
+    if track == "urgent":
+        p.moveTo(4, 15)
+        for curve in ((4, 15, 5, 14, 8, 14), (11, 14, 13, 16, 16, 16), (19, 16, 20, 15, 20, 15)):
+            p.curveTo(*curve)
+        p.lineTo(20, 3)
+        for curve in ((20, 3, 19, 4, 16, 4), (13, 4, 11, 2, 8, 2), (5, 2, 4, 3, 4, 3)):
+            p.curveTo(*curve)
+        p.close()
+        p.moveTo(4, 22)
+        p.lineTo(4, 15)
+    elif track == "at_risk":
+        p.arc(2, 4, 22, 24, 150, 240)
+        p.moveTo(12, 14)
+        p.lineTo(16, 10)
+    else:
+        p.moveTo(9, 5)   # the board: open at the top for the clip, with rounded corners
+        for x0, y0, start, end in ((5, 5, 270, (5, 19)), (5, 17, 180, (17, 21)), (15, 17, 90, (19, 7)),
+                                   (15, 5, 0, (15, 5))):
+            p.arcTo(x0, y0, x0 + 4, y0 + 4, start, -90)
+            p.lineTo(*end)
+        p.roundRect(9, 3, 6, 4, 2)
+        p.moveTo(9, 14)
+        p.lineTo(11, 16)
+        p.lineTo(15, 12)
+    c.drawPath(p, stroke=1, fill=0)
     c.restoreState()
 
 
@@ -525,6 +611,91 @@ class ResultPanel(Flowable):
             self.note.drawOn(c, x0, bar_y - 25 - self.note_h)
 
 
+class TrackBand(Flowable):
+    """The "Next step" band under the result panel, from ahead/triage.py, in the track's tone. Urgent sets the eyebrow
+    over its label, then the summary with each reason hanging under it; at risk and not flagged are one strip (icon,
+    eyebrow, then the label and summary as one paragraph). r.band shrinks it for the last fit plans: "tight" sets the
+    eyebrow and label on one line and the text a size smaller; "lines" draws urgent as a strip too, with each value
+    reason as one line (label, value and cut-off), since its summary already says a doctor confirms them with tests;
+    "chips" puts those values on one line. Blood pressure and age reasons keep their words in every form."""
+
+    def __init__(self, r):
+        super().__init__()
+        self.r, self.t = r, r.track
+
+    def wrap(self, aw, ah):
+        t, band = self.t, self.r.band
+        full = band == "full"
+        self.width, self.tone, self.pad = aw, TRACK_TONES[t.name], 9 if full else 7
+        self.strip = t.name != "urgent" or band in ("lines", "chips")
+        if self.strip:   # 8.2pt keeps a patient's not-flagged sentence to one line
+            self.icon, self.head = 16, 0
+            self.tx = INSET + self.icon + 10 + _tracked_width(NEXT_STEP, 6.8, 1.0) + 12
+            self.blocks = [Paragraph(f'<font color="{_hex(self.tone[1])}"><b>{_esc(t.label)}.</b></font> '
+                                     f'{_esc(t.summary)}', ST["band_tight"])]
+        else:   # eyebrow over the label, as in the result panel (one line when tight), then the summary
+            self.icon, self.head = (22, 27) if full else (18, 17)
+            self.tx = INSET + self.icon + 11
+            self.blocks = [Paragraph(_esc(t.summary), ST["band" if full else "band_tight"])]
+        self.blocks += [Paragraph(text, ST["reason" if full else "reason_tight"]) for text in self._reasons(band)]
+        self.sizes = [p.wrap(aw - self.tx - INSET, 10_000)[1] for p in self.blocks]
+        # Summary to the first reason, then between reasons.
+        self.gaps = [0] + [(6 if full else 4) if i == 1 else (3 if full else 2) for i in range(1, len(self.blocks))]
+        self.body = self.head + sum(self.sizes) + sum(self.gaps)
+        self.height = 2 * self.pad - 1.5 + max(self.body, self.icon)   # the last line's leading is room enough below
+        return aw, self.height
+
+    def _reasons(self, band):
+        """Each reason as Paragraph markup: in the audience's words, or a value reason's short form for "lines" and
+        "chips" (chips joins them into one line where the first one stood, each chip kept whole)."""
+        out, chips = [], []
+        for reason in self.t.reasons:
+            if band not in ("lines", "chips") or reason.line is None:
+                out.append(_esc(reason.words))
+            elif band == "lines":
+                label, value, cut = map(_esc, reason.line)
+                out.append(f"<b>{label}</b> {value}, {cut}")
+            else:   # no-break spaces inside a chip, so a second line starts with a whole chip
+                label, value = (_esc(part.replace(" ", "\xa0")) for part in reason.line[:2])
+                out += [] if chips else [None]
+                chips.append(f"<b>{label}</b>\xa0{value}")
+        return ["\xa0\xa0·\xa0 ".join(chips) if text is None else text for text in out]
+
+    def draw(self):
+        c, t, w, h = self.canv, self.t, self.width, self.height
+        fill, ink, tint, outline = self.tone
+        c.setFillColor(tint)
+        c.setStrokeColor(outline)
+        c.setLineWidth(0.8)
+        c.roundRect(0.4, 0.4, w - 0.8, h - 0.8, 4, stroke=1, fill=1)
+        # The icon, eyebrow and label come before the text, so copied text reads in order.
+        if self.strip:   # the text centres on the icon when shorter; the icon and eyebrow sit on its first line
+            y = h - self.pad + 0.75 - max(0.0, self.icon - self.body) / 2
+            size = self.blocks[0].style.fontSize
+            base = y - size
+            _track_icon(c, INSET, base + size * 0.35 - self.icon / 2, self.icon, t.name, fill)
+            _tracked(c, INSET + self.icon + 10, base + 0.4, NEXT_STEP, 6.8, 1.0, ink)
+        else:
+            top = h - self.pad
+            _track_icon(c, INSET, top - self.icon + 0.5, self.icon, t.name, fill)
+            if self.r.band == "tight":   # the label follows the eyebrow on its line
+                x, base, size = self.tx + _tracked(c, self.tx, top - 10, NEXT_STEP, 6.8, 1.0, ink) + 9, top - 10.6, 11.5
+            else:
+                _tracked(c, self.tx, top - 5.2, NEXT_STEP, 6.8, 1.0, ink)
+                x, base, size = self.tx - 0.4, top - 20.6, 12.5
+            c.setFillColor(ink)
+            c.setFont("Helvetica-Bold", size)
+            c.drawString(x, base, _fit(t.label, "Helvetica-Bold", size, w - x - INSET))
+            y = top - self.head
+        for i, (para, height, gap) in enumerate(zip(self.blocks, self.sizes, self.gaps)):
+            y -= gap + height
+            para.drawOn(c, self.tx, y)
+            if i:   # reasons hang their marker in the gutter, so their text lines up with the summary's
+                font = para.style.fontSize
+                c.setFillColor(fill)
+                c.circle(self.tx - 7, y + height - font + font * 0.35, 1.9, stroke=0, fill=1)
+
+
 # =============================================================================
 # Sections
 # =============================================================================
@@ -638,11 +809,17 @@ def _factor_grid(r):
     return table
 
 
+def _urgent(r):
+    return r.track is not None and r.track.name == "urgent"
+
+
 def _reading(r):
     if r.patient:
+        # Under a "See a doctor soon" band, regular check-ups would read as leave to wait for a routine visit.
+        check_ups = "" if _urgent(r) else " Keep up your regular check-ups."
         return [("Not a probability.", "Your score is a model output. It is not the chance that you have the condition."),
                 ("Not a diagnosis.", "A flag is not a diagnosis. Only a doctor can diagnose a condition."),
-                ("Not an all-clear.", "A lower score does not rule the condition out. Keep up your regular check-ups.")]
+                ("Not an all-clear.", "A lower score does not rule the condition out." + check_ups)]
     return [("Not a probability.", "The score is a model output, not the patient's probability of disease."),
             ("Not a diagnosis.", "A flag is not a diagnosis; findings need clinical confirmation."),
             ("Not a rule-out.", "A lower score does not rule disease out.")]
@@ -741,12 +918,21 @@ def _next_steps(r):
                  if r.factors and r.blanks else
                  "Some factors were noted in my answers. Which of them matter most for me?" if r.factors else
                  "Some values were left blank. Should I have them measured?" if r.blanks else "")
-        items = (["My result was flagged. What should we look at first?"] if r.flagged else []) + [
-            "Given my health and family history, which checks or tests make sense for me?"] + ([noted] if noted else []) + [
-            "Is there anything I could change day to day to lower my risk?", "How often should I be checked for this?"]
+        change = "Is there anything I could change day to day to lower my risk?"
+        if _urgent(r):   # questions for a visit soon about the band's reasons, not for the next routine check-up
+            values = r.track.values
+            first = ("AHEAD's screening rules are written for adults. Which tests would confirm this result for me?"
+                     if not values else f"{'One of my values is' if values == 1 else 'Some of my values are'} in a "
+                     "range doctors use when diagnosing a condition. Which tests will confirm it?")
+            items, visit = [first] + ([noted] if noted else []) + [change], "Please bring it to a doctor soon"
+        else:
+            items = (["My result was flagged. What should we look at first?"] if r.flagged else []) + [
+                "Given my health and family history, which checks or tests make sense for me?"] + (
+                [noted] if noted else []) + [change, "How often should I be checked for this?"]
+            visit = "You could bring it to your next appointment"
         out = [_heading("Questions to ask your doctor"), Spacer(1, HEAD_GAP + 1),
-               Paragraph("This summary is a starting point for a conversation, not a diagnosis. You could bring it to "
-                         "your next appointment and ask:", ST["item"]), Spacer(1, 4)]
+               Paragraph(f"This summary is a starting point for a conversation, not a diagnosis. {visit} and ask:",
+                         ST["item"]), Spacer(1, 4)]
     else:
         items = ["Confirm findings with appropriate testing and clinical assessment as indicated."] + (
             ["Interpret the risk factors noted above in the context of the full history."] if r.factors else []) + [
@@ -781,7 +967,8 @@ def _story(r, layout, brk=None):
         sections = ([_entered(r, CONTENT_W)] if r.values else []) + (
             [[KeepTogether([_factor_heading(r), Spacer(1, HEAD_GAP), _factor_grid(r)])]] if r.factors else []) + [
             [KeepTogether([_heading("How to read this result"), Spacer(1, HEAD_GAP), _reading_wide(r)])]] + tail
-    story = [_identity(r), Spacer(1, 12), ResultPanel(r)]
+    story = [_identity(r), Spacer(1, 12), ResultPanel(r)] + ([Spacer(1, 8 if r.band == "full" else 6), TrackBand(r)]
+                                                             if r.track else [])
     for i, section in enumerate(sections):
         story += [PageBreak() if i == brk else _gap(r.gap)] + section
     return story, len(sections)
@@ -902,8 +1089,15 @@ def _render(r):
     flows, last = [], None
     # Later plans trim the section gaps, and the last one the rail's table rows, before a second page is allowed.
     plans = [(layout, gap, 2.6) for gap in (GAP, 9) for layout in (["side"] if side else []) + ["stacked", "rail"]]
-    for layout, gap, rows in plans + [("rail", 7, 2.0), ("rail", 6, 1.6)]:
-        r.gap, r.rows = gap, rows
+    tightest = [("rail", 7, 2.0), ("rail", 6, 1.6)]
+    # A Next step band can take the room a long input list needs, so its smaller forms are the last tries for one
+    # page, on the tightest plan: tight, then for urgent the reasons' short lines, then (two or more of them) their
+    # values on one line. Full words on tight spacing come before smaller words on roomier spacing.
+    lines = sum(reason.line is not None for reason in r.track.reasons) if _urgent(r) else 0
+    bands = (["tight"] + (["lines"] if _urgent(r) else []) + (["chips"] if lines > 1 else [])) if r.track else []
+    for layout, gap, rows, band in [(*plan, "full") for plan in plans + tightest] + [
+            (*tightest[-1], band) for band in bands]:
+        r.gap, r.rows, r.band = gap, rows, band
         out = _build(r, layout)
         if out and out.pages == 1:
             if out.fills[0] < 0.86:   # share spare height between the section gaps; line spacing never changes
@@ -914,6 +1108,7 @@ def _render(r):
         if out and layout != "rail":   # the rail's one tall row would leave a hole on page 1
             flows.append((layout, gap, out))
         last = out or last
+    r.band = "full"   # the flows below were built with the full band (the smaller ones only try the tightest plan)
     if all(out.fills[-1] < SPARSE for *_, out in flows):
         for layout, gap, out in list(flows):
             r.gap = gap

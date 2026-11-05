@@ -1,18 +1,54 @@
 """Personal dashboard drawn exclusively from the signed-in patient's saved records."""
-from datetime import date
+import json
+from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
-from ahead.components import condition_cards, empty_state, go_to, section_heading, disclaimer
-from ahead.platform_data import lifestyle_history,get_goals,challenge_days,open_doses,local_today
+from ahead.components import condition_cards, empty_state, go_to, section_heading, disclaimer, track_panel
+from ahead.config import DISEASES
+from ahead.platform_data import lifestyle_history,get_goals,challenge_days,open_doses,local_today,to_local
+from ahead.screening import share_with_doctor
 from ahead.storage import load_screenings
+from ahead.triage import open_urgent, track_text
 from ahead.wellness import challenge_summary
 from ahead.visuals import summary_card,week_strip,score_ring,progress_card,category_chart,trend,COLORS
+
+RECENT_DAYS=30   # an urgent result older than this no longer gets the home banner
+
+
+def _screening_name(disease):
+    return DISEASES[disease]['card_title'].lower()
+
+
+def _urgent_banner(assessments,today):
+    """
+    One calm banner when a screening saved in the last RECENT_DAYS local days is still on the urgent track (see
+    open_urgent): the newest such result with its first open reason, and who can see it. A result for another
+    condition never hides it.
+    """
+    since=today-timedelta(days=RECENT_DAYS-1)
+    urgent=open_urgent([row for row in assessments if to_local(row['created_at']).date()>=since])
+    if not urgent:return
+    (row,result),others=urgent[0],urgent[1:]
+    moment=to_local(row['created_at'])
+    note=f"From your {_screening_name(row['disease'])} on {moment.day} {moment:%b %Y}."
+    later=sum(r['disease']==row['disease'] for r in assessments[:assessments.index(row)])   # newest first
+    if later:   # say why an older result still shows
+        note+=f" Your later {_screening_name(row['disease'])}{'s'*(later>1)} did not re-check this value."
+    if others:
+        dated=[f"{_screening_name(r['disease'])} on {to_local(r['created_at']).day} {to_local(r['created_at']):%b %Y}"
+               for r,_ in others]
+        note+=(f" Your {' and '.join(dated)} {'is' if len(others)==1 else 'are'} also marked "
+               f"\"{track_text('urgent')['label']}\".")
+    with st.container(key='home_track_banner'):
+        track_panel(dict(result,reasons=result['reasons'][:1]),'patient',note=note)
+        share_with_doctor('home_share')
 
 
 def render_patient_dashboard():
     owner=st.session_state.user['id']
     records=lifestyle_history(owner); goals=get_goals(owner); days=challenge_days(owner)
     assessments=load_screenings(owner); today=local_today(); challenge=challenge_summary(days)
+    _urgent_banner(assessments,today)
     due=open_doses(owner,today,today)
     goal_count=min(len(goals),6)
     cards=[('screenings','Screenings saved',len(assessments),None,'#8E7CC3','screenings',

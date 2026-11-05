@@ -1,9 +1,10 @@
 """
 ahead/screening.py
 ==================
-The screening flow: input form, prediction, gauge, guidance, AHEAD Insight
-(Gemini) and model interpretation. Patients read it about themselves; doctor
-accounts get the same flow worded about the entered values and the patient.
+The screening flow: input form, prediction, gauge, the result's track
+(ahead/triage.py), guidance, AHEAD Insight (Gemini) and model interpretation.
+Patients read it about themselves; doctor accounts get the same flow worded
+about the entered values and the patient.
 """
 
 import math
@@ -18,7 +19,8 @@ import streamlit as st
 
 from ahead.clinical_data import OPTIONAL_BLANK, input_bounds, shown_value
 from ahead.components import (
-    current_user, disclaimer, model_label, model_selector, page_header, record_screening, result_card, section_heading,
+    current_user, disclaimer, markdown_literal, model_label, model_selector, page_header, pref, record_screening,
+    result_card, section_heading, track_panel,
 )
 from ahead.config import (
     DISEASE_GROUP_DESCRIPTIONS, DISEASES, FEATURE_GROUPS, GENDER_CODED_FIELDS, GROUP_DESCRIPTIONS, OPTIONAL_INPUTS,
@@ -28,8 +30,11 @@ from ahead.resources import (
     best_model, decision_threshold, feature_summary, features, final_metrics, gemini_available, generate_text,
     load_pipeline, missing_inputs_profile, validation_results,
 )
+from ahead.pages.settings import open_care_team
+from ahead.platform_data import doctors_for
 from ahead.reports import patient_report
 from ahead.theme import show_chart, style_figure, tokens
+from ahead.triage import track_text, triage
 
 
 # =============================================================================
@@ -458,8 +463,12 @@ DOCTOR_URGENT_MESSAGES = {
 }
 
 
-def get_next_steps(disease: str, prediction: int, doctor: bool = False) -> list:
-    return (DOCTOR_NEXT_STEPS if doctor else NEXT_STEPS)[disease][prediction]
+def get_next_steps(disease: str, prediction: int, doctor: bool = False, track: dict | None = None) -> list:
+    """
+    The steps for a result. An urgent *track* (a triage() result) reads the flagged steps, which open with a medical
+    review, even when the model did not flag it: routine screening would contradict "See a doctor soon".
+    """
+    return (DOCTOR_NEXT_STEPS if doctor else NEXT_STEPS)[disease][1 if track and track["urgent"] else prediction]
 
 
 def _urgent(disease: str, doctor: bool) -> None:
@@ -483,9 +492,27 @@ def _action_cards(steps: list) -> None:
 # AHEAD INSIGHT (Gemini)
 # =============================================================================
 
-def generate_ai_guidance(disease, prediction, probability, risk_factors, user_values, threshold, usual_threshold,
-                         doctor: bool = False) -> str:
+def _insight_track(prediction: int, track: dict | None, doctor: bool) -> tuple:
+    """
+    (result label, track line, extra requirement) for the prompt. An urgent track names its reasons, so AHEAD Insight
+    is never told only "Lower screening risk" for a result the page marks "See a doctor soon".
+    """
     result_label = "Elevated screening risk" if prediction == 1 else "Lower screening risk"
+    if not (track and track["urgent"]):
+        return result_label, "", ""
+    label = track_text(track, "doctor" if doctor else "patient")["label"]
+    if prediction != 1:   # only an entered value can make a result the model did not flag urgent
+        result_label = ("Not flagged by the model, but entered values are in a range doctors use when diagnosing a "
+                        "condition")
+    reasons = " ".join(reason["doctor"] for reason in track["reasons"])   # third person suits both prompts
+    return (result_label, f'AHEAD track: "{label}". {reasons}\n',
+            f'- AHEAD has put this result on its "{label}" track for the reasons above. Say so plainly, say that a '
+            "doctor needs to confirm it with tests, and never describe the result as reassuring or low risk.\n")
+
+
+def generate_ai_guidance(disease, prediction, probability, risk_factors, user_values, threshold, usual_threshold,
+                         doctor: bool = False, track: dict | None = None) -> str:
+    result_label, track_line, track_rule = _insight_track(prediction, track, doctor)
     cut_off = f"{threshold * 100:g}%" + (
         f" (usual {usual_threshold * 100:g}%, lowered because some lab values were not provided; "
         "a score above this cut-off is flagged even if the number looks low)" if threshold < usual_threshold else "")
@@ -503,7 +530,7 @@ review. Help the clinician read the existing result in the context of the entere
 
 Condition screened: {DISEASES[disease]['long_label']}
 Screening result: {result_label}
-Model screening score: {probability * 100:.1f}%
+{track_line}Model screening score: {probability * 100:.1f}%
 Classification threshold: {cut_off}
 Relevant factors identified by AHEAD: {risk_factors if risk_factors else 'No major rule-based factors highlighted'}
 Entered values: {friendly_values}
@@ -517,7 +544,7 @@ Use exactly these headings:
 ### Points to Consider
 
 Requirements:
-- Refer to "the patient" in the third person; never address the reader as the patient.
+{track_rule}- Refer to "the patient" in the third person; never address the reader as the patient.
 - Make clear that the result is an educational screening estimate, not a diagnosis, and that the score is not a calibrated probability.
 - In "Notable Entered Values", identify 2 to 4 entered values or history items that are relevant, without claiming that any single input caused the prediction.
 - If an individual measurement may deserve attention even when the overall result is lower, say so.
@@ -540,7 +567,7 @@ existing result in the context of the information they entered.
 
 Condition screened: {DISEASES[disease]['long_label']}
 Screening result: {result_label}
-Model screening score: {probability * 100:.1f}%
+{track_line}Model screening score: {probability * 100:.1f}%
 Classification threshold: {cut_off}
 Relevant factors identified by AHEAD: {risk_factors if risk_factors else 'No major rule-based factors highlighted'}
 Patient-entered information: {friendly_values}
@@ -554,7 +581,7 @@ Use exactly these headings:
 ### Questions to Discuss With a Healthcare Professional
 
 Requirements:
-- Explain the screening result in simple language and make clear that it is an educational screening estimate, not a diagnosis.
+{track_rule}- Explain the screening result in simple language and make clear that it is an educational screening estimate, not a diagnosis.
 - Explain the model score without describing it as the user's true medical probability.
 - Relate the explanation to the user's actual entered information.
 - In "What Stands Out From Your Inputs", identify 2 to 4 relevant entered values or history items that are worth understanding or discussing.
@@ -623,7 +650,8 @@ DOCTOR_GROUP_DESCRIPTIONS = {
 DOCTOR_DISEASE_GROUP_DESCRIPTIONS = {
     "kidney": {
         "Clinical Measurements": "From a recent blood or urine test. Serum creatinine, eGFR and urine ACR are needed "
-                                 "for a kidney estimate; leave blank any others that are not available.",
+                                 "for a kidney estimate; leave blank any others that are not available. ACR is in mg/g "
+                                 "(a result in mg/mmol times 8.84 is mg/g).",
     },
 }
 DOCTOR_SUBTITLES = {
@@ -708,6 +736,8 @@ def lab_results_needed(disease: str, result: dict, doctor: bool = False) -> None
         f"{_left_blank(needed, doctor)}. {NO_SCORE_REASON[disease]} No score is shown and nothing was saved; "
         f"the factors below come only from {source}."
     )
+    # Draws nothing unless an entered value is already in a diagnostic range.
+    _track(triage(disease, result["values"]), doctor, f"{disease}_share", "no_score")
     factors = identify_risk_factors(disease, result["values"])
     if factors:
         st.html("".join(f'<span class="factor-chip">{escape(f)}</span>' for f in factors))
@@ -721,6 +751,47 @@ def lab_results_needed(disease: str, result: dict, doctor: bool = False) -> None
         _action_cards(NO_SCORE_STEPS[disease])
         st.link_button("Find a nearby clinic (map search)", "https://www.google.com/maps/search/hospital+near+me/")
     _urgent(disease, doctor)
+
+
+# =============================================================================
+# TRACK (ahead/triage.py sorts every result; the share line is reused on the patient home)
+# =============================================================================
+
+# Why a doctor cannot see a result in AHEAD: (reason, what to do with a linked doctor, what to do without one).
+NOT_SAVED = {
+    "history_off": ("This result was not saved because Keep screening history is off in Settings",
+                    "Download the PDF to show them.", "Download the PDF to show your doctor."),
+    "no_score": ("AHEAD saves only results with a score", "Tell them about the values above.",
+                 "Tell your doctor about the values above."),
+}
+
+
+def share_with_doctor(key: str, not_saved: str = "") -> None:
+    """
+    Who can see a patient's urgent or at-risk result. Linked doctors see saved results, so they are named; with none
+    linked, a button opens Settings > Care team access. *not_saved* (a NOT_SAVED key) says why this result was not
+    saved, so no doctor can see it in AHEAD.
+    """
+    owner = (st.session_state.get("user") or {}).get("id")
+    names = sorted((d["name"] for d in doctors_for(owner)), key=str.lower) if owner else []
+    who = f"your linked doctor{'s' if len(names) > 1 else ''}, {markdown_literal(_listed(names))}," if names else ""
+    if not_saved:
+        why, tell_them, tell_doctor = NOT_SAVED[not_saved]
+        st.caption(f"{why}, so {who} can't see it in AHEAD. {tell_them}" if names else f"{why}. {tell_doctor}")
+    elif names:
+        st.caption(f"{who[:1].upper()}{who[1:]} can see this result in AHEAD.")
+    else:
+        with st.container(key=f"{key}_row", horizontal=True, vertical_alignment="center"):
+            if st.button("Share with your doctor", key=key, type="primary"):
+                open_care_team()
+            st.caption("No doctor can see your results yet. Add your doctor under Care team access in Settings.")
+
+
+def _track(result: dict, doctor: bool, key: str, not_saved: str = "") -> None:
+    """The result's track under the result card; a patient on the urgent or at-risk track also reads who can see it."""
+    track_panel(result, "doctor" if doctor else "patient")
+    if not doctor and result["track"] in ("urgent", "at_risk"):
+        share_with_doctor(key, not_saved)
 
 
 # =============================================================================
@@ -795,6 +866,7 @@ def render_predictor(disease: str) -> bool:
             result = {
                 "values": values, "probability": probability, "prediction": prediction,
                 "model": selected_name, "threshold": used_threshold, "missing": missing, "profile": profile,
+                "saved": pref("keep_history"),   # record_screening saves only then, so only then can a doctor see it
             }
             record_screening(disease, selected_name, probability, prediction, used_threshold, values)
         st.session_state.last_results[disease] = result
@@ -814,6 +886,7 @@ def render_predictor(disease: str) -> bool:
 
     values, probability, prediction = result["values"], result["probability"], result["prediction"]
     model_name, threshold = result["model"], result["threshold"]
+    track = triage(disease, values, probability, threshold)   # the threshold this result was flagged against
     input_frame = pd.DataFrame([{k: ("Not provided" if _blank(v) else v) for k, v in values.items()}],
                                columns=feature_list)
     # Everything below describes the model that produced *this* result, which may differ
@@ -839,6 +912,7 @@ def render_predictor(disease: str) -> bool:
                    status="Flagged for review" if prediction else "Not flagged",
                    color="#C75D5D" if prediction else "#2E9477",
                    note=f"Classification threshold: {threshold * 100:g}%. This score is not a calibrated clinical probability.")
+    _track(track, doctor, f"{disease}_share", "" if result.get("saved", True) else "history_off")
     profile = result.get("profile")
     if profile:
         # Figures for this model with the same inputs blank, not the full-input ones.
@@ -863,7 +937,7 @@ def render_predictor(disease: str) -> bool:
                        + low_specificity_caveat(disease, profile)) if profile else "",
         # A session screening has no saved record, so there is no review status to print.
         status=None, audience="doctor" if doctor else "patient", name="" if doctor else current_user()["name"],
-        factors=identify_risk_factors(disease, values)),
+        factors=identify_risk_factors(disease, values), track=track),
         file_name=f"ahead_{disease}_screening.pdf", mime="application/pdf")
 
     # No History tab for doctors: their saved screenings are of different people, so one trend line would mix them.
@@ -875,7 +949,7 @@ def render_predictor(disease: str) -> bool:
             section_heading("Points to review", "Considerations for this result. Further assessment as clinically indicated.")
         else:
             section_heading("Recommended Next Steps", "Practical actions to consider after this screening result.")
-        _action_cards(get_next_steps(disease, prediction, doctor))
+        _action_cards(get_next_steps(disease, prediction, doctor, track))
         if not doctor:
             st.link_button("Find a nearby clinic (map search)", "https://www.google.com/maps/search/hospital+near+me/")
 
@@ -923,7 +997,8 @@ def render_predictor(disease: str) -> bool:
                 with st.spinner("Preparing the insight…" if doctor else "Preparing your personalized insight…"):
                     try:
                         text = generate_ai_guidance(disease, prediction, probability, risk_factors, values,
-                                                    threshold, decision_threshold(disease, model_name), doctor)
+                                                    threshold, decision_threshold(disease, model_name), doctor,
+                                                    track=track)
                     except Exception:
                         text = ""
                 if text:

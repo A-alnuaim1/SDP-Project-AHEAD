@@ -134,7 +134,8 @@ GROUP_DESCRIPTIONS = {
 DISEASE_GROUP_DESCRIPTIONS = {
     "kidney": {
         "Clinical Measurements": "From a recent blood or urine test. Serum creatinine, eGFR and urine ACR are "
-                                 "needed for a kidney estimate; leave any others you don't have blank.",
+                                 "needed for a kidney estimate; leave any others you don't have blank. Enter ACR in "
+                                 "mg/g (a result in mg/mmol times 8.84 is mg/g).",
     },
 }
 

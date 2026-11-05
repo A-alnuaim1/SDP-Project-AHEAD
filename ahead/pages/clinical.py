@@ -1,4 +1,4 @@
-"""Doctor-only intake, validation, scoring, review queue and reports."""
+"""Doctor-only intake, validation, scoring, review queue (with each record's track, ahead/triage.py) and reports."""
 
 import hashlib
 import json
@@ -11,19 +11,21 @@ import streamlit as st
 from ahead.clinical_data import dob_age, issue_text, prepare_upload, shown_value, validate_row
 from ahead.visuals import summary_tile
 from ahead.components import (current_user, empty_state, markdown_literal, model_label, model_selector, page_header, result_card,
-                              section_heading)
+                              section_heading, track_panel)
 from ahead.config import DISEASES, pretty_label
 from ahead.reports import patient_report
 from ahead.resources import feature_summary, features, final_metrics, predict_probability, validation_results, best_model
 from ahead.storage import insert_records, list_records, save_scoring_run, update_record
 from ahead.screening import identify_risk_factors, individual_sensitivity
 from ahead.platform_data import append_record_prediction, record_prediction_history, to_local
+from ahead.triage import TRACKS, track_text, triage_saved
 
 ID_COLUMNS = ["PatientID", "patient_id", "Patient ID", "ID", "id"]
 MAX_ROWS = 5000
 SOURCES = {"batch": "Cohort scoring", "corrected": "Corrected record"}
 # A datetime column (not preformatted text) so a header click sorts chronologically.
 LOCAL_TIME = {"Date": st.column_config.DatetimeColumn(format="D MMM YYYY, HH:mm")}
+TRACK_LABELS = [track_text(track, "doctor")["label"] for track in TRACKS]   # Urgent, At risk, Not flagged, No score
 
 
 def _when(stamp):
@@ -39,6 +41,32 @@ def _status(record):
     """The status the doctor reads: a record scored below the threshold is 'Not flagged', not 'Ready' (unscored).
     Display only; the stored status stays 'Ready'."""
     return "Not flagged" if record["status"] == "Ready" and record["score"] is not None else record["status"]
+
+
+def _track(record, disease):
+    """The record's track (ahead/triage.py). The urgent rules need no score, so an unscored record is already Urgent
+    or 'No score'. An incomplete record (never scored) is Urgent when an entered number trips a rule, otherwise None:
+    a value past the model's input range (a blood pressure of 210/125, a glucose of 420) fails validation but is the
+    most pressing kind, so it is never hidden. Blanks and non-numbers never trip a rule; _unchecked asks the doctor
+    to confirm a value that failed validation."""
+    if record["status"] == "Incomplete" or json.loads(record["issues_json"]):
+        track = triage_saved(disease, record["values_json"])
+        return track if track["urgent"] else None
+    return triage_saved(disease, record["values_json"], record["score"], record["threshold"])
+
+
+def _unchecked(track, issues):
+    """The record panel's note when an urgent reason rests on a value that failed validation, so may be an entry
+    error: 'Blood glucose (420 mg/dL) failed the input check above ...'. Empty otherwise."""
+    failed = {issue.split(": ", 1)[0] for issue in issues}
+    named = [f"{r['label']} ({r['value_text']})" for r in track["reasons"] if failed & set(r["features"])]
+    if not named:
+        return ""
+    if len(named) == 1:
+        return (f"{named[0]} failed the input check above and may be an entry error. Check it against the source record "
+                "before acting on it.")
+    return (f"{', '.join(named[:-1])} and {named[-1]} failed the input check above and may be entry errors. Check them "
+            "against the source record before acting on them.")
 
 
 def _editable(feature, value, info):
@@ -169,13 +197,16 @@ def _rerun_after_save():
     st.rerun()
 
 
-def _summary(records):
-    """The cohort at a glance, above the queue: intake on the first row, review progress on the second."""
+def _summary(records, tracks):
+    """The cohort at a glance, above the queue: intake on the first row, review progress on the second. The urgent
+    count sits in the Records note, so the grid stays two even rows; it counts the rows the Track filter calls Urgent."""
     scored = [r for r in records if r["score"] is not None]
+    urgent = sum(bool(track and track["urgent"]) for track in tracks.values())
     needs = sum(r["status"] == "Incomplete" for r in records)
     flagged, reviewed, excluded = (sum(r["status"] == s for r in records) for s in ("Flagged", "Reviewed", "Excluded"))
     pending = sum(r["status"] not in ("Reviewed", "Excluded") for r in scored)
-    tiles = [("records", "Records", len(records), "Rows in this upload", "#0E9AA7", "uploads"),
+    tiles = [("records", "Records", len(records), "Rows in this upload" + (f" · {urgent} urgent" if urgent else ""), "#0E9AA7",
+              "uploads"),
              ("incomplete", "Incomplete", needs, "Missing or invalid inputs" if needs else "All inputs complete",
               "#C98F1E", "returning"),
              ("scored", "Scored", len(scored), "Model scores saved" if scored else "None scored yet", "#8E7CC3", "scored",
@@ -210,7 +241,8 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
     cohort = st.selectbox("Uploaded cohort", cohorts, format_func=lambda c: labels.get(c, str(c)),
                           key=f"clinical_cohort_{disease}")
     records = sorted(groups[cohort], key=lambda r: r["source_row"])
-    _summary(records)
+    tracks = {r["id"]: _track(r, disease) for r in records}
+    _summary(records, tracks)
     ready = [r for r in records if not json.loads(r["issues_json"]) and r["status"] not in ("Excluded", "Reviewed")]
     if st.button(f"Score {len(ready)} eligible record{'s' if len(ready) != 1 else ''} with {model_label(model_name)}",
                  disabled=not ready, type="primary"):
@@ -233,14 +265,24 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
                 st.toast("No valid records remain after rechecking dates and inputs.")
             _rerun_after_save()
     rows = [{"Row": r["source_row"], "Patient": r["patient_id"], "Status": _status(r),
+             "Track": track_text(tracks[r["id"]], "doctor")["label"] if tracks[r["id"]] else "",
              "Model score (%)": None if r["score"] is None else round(r["score"] * 100, 1),
              "Issues": _issues(json.loads(r["issues_json"])), "Model": model_label(r["model"] or "")}
             for r in records]
     table = pd.DataFrame(rows)
-    # 'Ready' rows are complete but unscored; 'Not flagged' rows were scored below the threshold.
-    status_filter = st.selectbox("Show", ["All", "Incomplete", "Ready", "Flagged", "Not flagged", "Reviewed", "Excluded"])
+    # 'Ready' rows are complete but unscored; 'Not flagged' rows were scored below the threshold. An incomplete row has a
+    # track only when an entered value is urgent (see _track); otherwise its Track is blank and it shows only under All.
+    show_column, track_column = st.columns(2)
+    with show_column:
+        status_filter = st.selectbox("Show", ["All", "Incomplete", "Ready", "Flagged", "Not flagged", "Reviewed", "Excluded"])
+    with track_column:
+        track_filter = st.selectbox("Track", ["All", *TRACK_LABELS])
     shown = table if status_filter == "All" else table[table["Status"] == status_filter]
-    if shown.empty:
+    shown = shown if track_filter == "All" else shown[shown["Track"] == track_filter]
+    if shown.empty and track_filter != "All":
+        st.caption(f"No records in this upload are on the {track_filter} track." if status_filter == "All"
+                   else f"No records in this upload match Show: {status_filter} and Track: {track_filter}.")
+    elif shown.empty:
         st.caption("No records scored below the threshold in this upload." if status_filter == "Not flagged"
                    else f"No {status_filter.lower()} records in this upload.")
     else:
@@ -270,11 +312,13 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
         st.warning("Correct these inputs before scoring:\n" + "\n".join(f"- {issue_text(i)}" for i in issues))
     if record["status"] == "Incomplete" or st.toggle("Edit this record", key=f"edit_toggle_{selected_id}"):
         _edit_record(record, owner_id, disease, required, stats, pipeline, model_name, threshold)
-    values = json.loads(record["values_json"])
+    values, track = json.loads(record["values_json"]), tracks[selected_id]
     if record["score"] is not None:
         result_card(int(record["score"] >= record["threshold"]), record["score"],
                     DISEASES[disease]["long_label"], record["model"], record["threshold"], audience="doctor",
                     status=_status(record))
+        if track:
+            track_panel(track, "doctor")
         st.caption("Review the measurements and history independently before acting on this model output.")
         metrics = final_metrics(disease) if record["model"] == best_model(disease) else next(
             (m for m in validation_results(disease) if m["model"] == record["model"]), {})
@@ -287,7 +331,8 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
                            metric_source="test" if record["model"] == best_model(disease) else "validation",
                            audience="doctor", reviewer=current_user()["name"] if decided else "",
                            reviewed_at=record["updated_at"] if decided else None,
-                           source=f"{record.get('source_name') or 'Uploaded file'}, row {record['source_row']}", factors=factors),
+                           source=f"{record.get('source_name') or 'Uploaded file'}, row {record['source_row']}", factors=factors,
+                           track=track),
                            file_name=f"ahead_record_{record['id']}.pdf", mime="application/pdf")
         if factors:
             # Not "values above typical ranges": the list also holds history answers such as a previous stroke.
@@ -309,6 +354,8 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
                     st.info("The entered values match the typical training values, so there is no input comparison to show.")
             except (ValueError, TypeError):
                 st.info("Individual model sensitivity is unavailable for this record.")
+    elif track:   # the urgent rules work before scoring; an unscored record with no urgent value draws nothing
+        track_panel(track, "doctor", _unchecked(track, issues))
     st.dataframe(pd.DataFrame({"Input": [pretty_label(f) for f in required],
                                "Value": [shown_value(f, values.get(f), stats[f]) for f in required]}),
                  hide_index=True, width="stretch")

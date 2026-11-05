@@ -19,6 +19,7 @@ from ahead.platform_data import init_platform, to_local
 from ahead.reports import patient_report
 from ahead.resources import best_model, feature_summary, features
 from ahead.storage import authenticate, create_user, init_db, insert_records, list_records, update_record
+from ahead.triage import track_text, triage
 
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
 # Lab values above the rule-based cut-offs, so the PDF has factors to print.
@@ -80,11 +81,11 @@ class PdfWiringTests(unittest.TestCase):
         return self.ok(at.run())
 
     # ------------------------------------------------------------------ Screenings page
-    def screen(self, user):
-        """Fill in the diabetes form with typical values and the labs above, submit it, and return what the
+    def screen(self, user, labs=LABS):
+        """Fill in the diabetes form with typical values and *labs*, submit it, and return what the
         'Download screening PDF' button was built from."""
         at = self.page(user, "screenings", active_screening="diabetes")
-        for feature, value in LABS.items():
+        for feature, value in labs.items():
             at.number_input(key=f"diabetes_{feature}").set_value(value)
         spy = ReportSpy()
         with mock.patch.object(screening, "patient_report", spy):
@@ -93,7 +94,7 @@ class PdfWiringTests(unittest.TestCase):
         self.assertIn("Download screening PDF", [b.proto.label for b in at.get("download_button")])
         self.assertEqual(len(spy.calls), 1)
         args, text = spy.last
-        self.assertEqual({k: args["values"][k] for k in LABS}, LABS)   # the submitted form, not a stored result
+        self.assertEqual({k: args["values"][k] for k in labs}, labs)   # the submitted form, not a stored result
         self.assertEqual(args["patient_id"], "Session screening")
         return args, text
 
@@ -120,25 +121,42 @@ class PdfWiringTests(unittest.TestCase):
         for absent in ("Pending review", "Review status", "Prepared for", "Layla Hassan"):
             self.assertNotIn(absent, text)
 
+    def test_screening_pdf_prints_the_track_of_the_same_result(self):
+        # Labs in the urgent range: the band under the result panel names the next step and its reasons.
+        labs = {"HbA1c_level": 7.1, "blood_glucose_level": 212}
+        for user, audience, label in ((self.patient, "patient", "See a doctor soon"), (self.doctor, "doctor", "Urgent")):
+            with self.subTest(audience=audience):
+                args, text = self.screen(user, labs)
+                track = args["track"]
+                self.assertEqual(track, triage("diabetes", args["values"], args["score"], args["threshold"]))
+                self.assertEqual((track["track"], track_text(track, audience)["label"]), ("urgent", label))
+                self.assertIn(f"NEXT STEP {label}", text)
+                for reason in track["reasons"]:
+                    self.assertIn(" ".join(reason[audience].split()), text)
+
     # ------------------------------------------------------------------ Clinical Dashboard
-    def upload(self, rows, source_name):
+    def upload(self, rows, source_name, disease="diabetes"):
         frame = pd.DataFrame(rows).astype(str)
-        insert_records(self.doctor["id"], "cohort", "diabetes",
-                       prepare_upload(frame, "diabetes", features("diabetes"), feature_summary("diabetes"), ["PatientID"]),
+        insert_records(self.doctor["id"], "cohort", disease,
+                       prepare_upload(frame, disease, features(disease), feature_summary(disease), ["PatientID"]),
                        source_name=source_name)
-        return sorted(list_records(self.doctor["id"], "diabetes"), key=lambda r: r["source_row"])
+        return sorted(list_records(self.doctor["id"], disease), key=lambda r: r["source_row"])
 
-    def score(self, record, score, status):
+    def score(self, record, score, status, disease="diabetes"):
         update_record(self.doctor["id"], record["id"], score=score, threshold=0.5, status=status,
-                      model=best_model("diabetes"))
+                      model=best_model(disease))
 
-    def dashboard(self, record_id=None):
-        """Open the Clinical Dashboard (on *record_id* if given) and return the arguments of its patient PDF."""
+    def dashboard(self, record_id=None, disease="diabetes"):
+        """Open the Clinical Dashboard on *disease* (and *record_id* if given) and return the arguments of its
+        patient PDF."""
         spy = ReportSpy()
         with mock.patch.object(clinical, "patient_report", spy):
             at = self.page(self.doctor, "clinical")
+            if disease != "diabetes":
+                next(s for s in at.selectbox if s.label == "Disease screening").set_value(disease)
+                self.ok(at.run())
             if record_id is not None:
-                at.selectbox(key="clinical_record_diabetes_cohort").set_value(record_id)
+                at.selectbox(key=f"clinical_record_{disease}_cohort").set_value(record_id)
                 self.ok(at.run())
         self.assertIn("Download patient PDF", [b.proto.label for b in at.get("download_button")])
         return spy.last
@@ -192,6 +210,23 @@ class PdfWiringTests(unittest.TestCase):
         self.assertIn("Review status Excluded", text)
         self.assertNotIn("Reviewed on", text)
         self.assertNotIn("Pending review", text)
+
+    def test_record_pdf_prints_the_track_of_the_record_on_one_page(self):
+        # Every kidney input, reviewed with a note: urine ACR, HbA1c and fasting blood sugar are in a diagnostic
+        # range, so the band is Urgent, as in the queue's Track column, and the copy still fits one page.
+        record = self.upload([typical_row("kidney", PatientID="K-1")], "kidney_cohort.csv", "kidney")[0]
+        self.score(record, 0.8, "Flagged", "kidney")
+        update_record(self.doctor["id"], record["id"], status="Reviewed", note="Discussed with the patient.")
+        args, text = self.dashboard(disease="kidney")
+        track = args["track"]
+        self.assertEqual(track, triage("kidney", args["values"], args["score"], args["threshold"]))
+        self.assertEqual([reason["feature"] for reason in track["reasons"]], ["ACR", "HbA1c", "FastingBloodSugar"])
+        self.assertEqual(args["audience"], "doctor")
+        band = text.split("NEXT STEP Urgent")[1].split("Entered values")[0]
+        for reason in track["reasons"]:   # the value with its unit, which only the band prints
+            self.assertIn(reason["value_text"], band)
+        self.assertIn("Discussed with the patient.", text)
+        self.assertIn("Page 1 of 1", text)
 
 
 if __name__ == "__main__":
