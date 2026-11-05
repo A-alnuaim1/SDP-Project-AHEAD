@@ -7,7 +7,6 @@ chips, suggested prompts and a chat transcript backed by Gemini.
 
 import json
 import re
-from datetime import datetime
 from html import escape
 from urllib.parse import quote
 
@@ -15,10 +14,13 @@ import streamlit as st
 
 from ahead.components import current_user, go_to, pref
 from ahead.config import ICONS_DIR, NAV_ITEMS
+from ahead.platform_data import local_now
 from ahead.resources import chat_reply, gemini_available, gemini_error_message, icon_uri, static_url, transcribe_audio
 from ahead.theme import is_dark, tokens
 
 WELCOME = "Hi! I'm AHEAD Assistant. What would you like to know about AHEAD or its screening conditions?"
+DOCTOR_WELCOME = ("Hi! I'm AHEAD Assistant. Ask me about AHEAD's screening models, the Clinical Dashboard or "
+                  "Patient Intelligence.")
 
 # (material icon, prompt)
 SUGGESTIONS = [
@@ -26,6 +28,13 @@ SUGGESTIONS = [
     (":material/cardiology:", "Tell me about the screening conditions"),
     (":material/explore:", "How do I use the platform?"),
 ]
+DOCTOR_SUGGESTIONS = [
+    (":material/link:", "How do patients link to me?"),
+    (":material/upload_file:", "How do I score an uploaded file?"),
+    (":material/insights:", "What does Patient Intelligence show?"),
+]
+DOCTOR_NOTICE = ("This assistant is for general questions about AHEAD and health topics. Do not paste identifiable "
+                 "patient records here; the consent-gated summary for a linked patient is in Patient Intelligence.")
 
 SYSTEM_PROMPT = (
     "You are AHEAD Assistant inside a university healthcare screening prototype called AHEAD "
@@ -41,6 +50,22 @@ SYSTEM_PROMPT = (
     "a person, do not claim a screening result confirms disease, and do not recommend starting, stopping or "
     "changing prescription medication. For urgent symptoms advise appropriate urgent medical care. "
     "Keep answers concise, warm and patient-friendly; use short paragraphs or bullet points."
+)
+
+DOCTOR_SYSTEM_PROMPT = SYSTEM_PROMPT.rsplit("Keep answers", 1)[0] + (
+    "The person asking is a signed-in clinician using a doctor account. Their menu has Overview, Screenings, "
+    "Data & Analytics, Clinical Dashboard, Advanced Analytics & Patient Intelligence, AI Assistant and Settings; "
+    "the Health & Lifestyle Tracker, Food Nutrition Analyzer, Medication Monitoring and Notifications pages are for "
+    "patient accounts only, so do not send the clinician there. Patients link to a doctor themselves under "
+    "Settings, Preferences, Care team access, by entering the doctor's account email. Patient Intelligence shows "
+    "only linked patients: their saved assessments and score history, activity, medication plans the doctor creates "
+    "with the dose log, a record-based pre-consultation summary (plus an optional Gemini summary only with the "
+    "patient's permission) and data-quality checks. The Clinical Dashboard imports a CSV or Excel file of "
+    "de-identified records for one condition, checks it, scores the eligible rows and records a review decision "
+    "per row. You cannot see any patient's records. If the clinician pastes identifiable patient details, do not "
+    "repeat them; remind them that the consent-gated summary is in Patient Intelligence. "
+    "Use a concise, professional, clinician-oriented tone with standard clinical terminology; refer to "
+    "\"the patient\" in the third person; use short paragraphs or bullet points."
 )
 
 # (label, svg paths) — rendered as <img> data URIs because st.html strips inline <svg>
@@ -87,9 +112,46 @@ LOCAL_ANSWERS = {
 }
 
 
-def _local_answer(prompt: str) -> str | None:
+# Doctor versions, checked before LOCAL_ANSWERS so "how do i use" describes the doctor tools.
+DOCTOR_LOCAL_ANSWERS = {
+    "link to me": (
+        "Patients link themselves. In their own **Settings → Preferences → Care team access** they enter your doctor "
+        "account email and choose **Add doctor**.\n\nOnce linked, the patient appears in **Advanced Analytics & "
+        "Patient Intelligence**. The patient can remove your access at any time, and separately decides whether "
+        "their linked records may be sent to Gemini for the optional AI summary."
+    ),
+    "upload": (
+        "1. Open the **Clinical Dashboard** and choose the condition and model.\n"
+        "2. Download the example upload template if needed, then upload a CSV or Excel file of de-identified records "
+        "(a patient ID column plus the model's columns; a DOB can stand in for age).\n"
+        "3. Check the import preview and choose **Save records to review queue**.\n"
+        "4. Under **Review and score**, score the eligible records, then open each record to correct its inputs, "
+        "read the model output and save a review decision."
+    ),
+    "patient intelligence": (
+        "**Advanced Analytics & Patient Intelligence** shows only patients who linked their account to you:\n\n"
+        "- **Overview** and **Disease Analytics**: linked patients, saved assessments and recent activity.\n"
+        "- **Patient Records & History**: each patient's saved assessments, score history and entered values.\n"
+        "- **Medication Monitoring**: the medication plans you create and the patient's dose log.\n"
+        "- **Clinical Insights**: a record-based pre-consultation summary, and an optional Gemini summary only with "
+        "the patient's permission.\n"
+        "- **Data Quality**: missing values, duplicates and upload issues to review."
+    ),
+    "how do i use": (
+        "1. **Clinical Dashboard**: upload a file of de-identified patient records, correct flagged values, score "
+        "the records and save a review decision for each.\n"
+        "2. **Patient Intelligence**: follow the patients who linked their account to you (saved assessments, "
+        "score history and activity) and create or adjust **medication plans**.\n"
+        "3. **Screenings**: score one set of entered values; these results are not attached to a patient record.\n"
+        "4. **Data & Analytics**: datasets, model performance and decision thresholds."
+    ),
+}
+
+
+def _local_answer(prompt: str, is_doctor: bool = False) -> str | None:
     text = prompt.lower()
-    for key, answer in LOCAL_ANSWERS.items():
+    pairs = [*DOCTOR_LOCAL_ANSWERS.items(), *LOCAL_ANSWERS.items()] if is_doctor else LOCAL_ANSWERS.items()
+    for key, answer in pairs:
         if key in text:
             return answer
     return None
@@ -202,14 +264,15 @@ if (!synth || !host.SpeechSynthesisUtterance) {{
 </script></body></html>""", height=46)
 
 
-def _reply(history: list) -> str:
+def _reply(history: list, is_doctor: bool = False) -> str:
     """Send the transcript as proper user/model turns with a system instruction."""
     turns = [{"role": "user" if m["role"] == "user" else "model", "text": m["content"]} for m in history[-12:]]
-    return chat_reply(SYSTEM_PROMPT, turns)
+    return chat_reply(DOCTOR_SYSTEM_PROMPT if is_doctor else SYSTEM_PROMPT, turns)
 
 
 def _append(role: str, content: str, voice: bool = False) -> None:
-    st.session_state.chat_messages.append({"role": role, "content": content, "time": datetime.now(), "voice": voice})
+    # Asia/Dubai like every other page; datetime.now() would follow the server clock (UTC when hosted).
+    st.session_state.chat_messages.append({"role": role, "content": content, "time": local_now(), "voice": voice})
 
 
 def _sync_speak_pref() -> None:
@@ -220,6 +283,7 @@ def _sync_speak_pref() -> None:
 
 def render_assistant() -> None:
     robot = str(ICONS_DIR / "chatbot.svg")
+    doctor = current_user()["is_doctor"]
 
     # page background (soft waves) in light mode; dark mode keeps the plain dark canvas
     if not is_dark():
@@ -259,15 +323,17 @@ def render_assistant() -> None:
     )
 
     if not st.session_state.chat_messages:
-        _append("assistant", WELCOME)
+        _append("assistant", DOCTOR_WELCOME if doctor else WELCOME)
 
     # suggestion chips, side by side (wrap on narrow screens)
     with st.container(key="assistant_suggestions", horizontal=True, gap="small"):
-        for index, (icon, text) in enumerate(SUGGESTIONS):
+        for index, (icon, text) in enumerate(DOCTOR_SUGGESTIONS if doctor else SUGGESTIONS):
             if st.button(f"{text}  →", key=f"suggest_{index}", icon=icon):
                 st.session_state.pending_prompt = text
                 st.rerun()
 
+    if doctor:
+        st.info(DOCTOR_NOTICE, icon=":material/privacy_tip:")
     if not gemini_available():
         st.info(
             "AHEAD Assistant needs a Gemini API key to answer. Set `GEMINI_API_KEY` in the environment or "
@@ -331,11 +397,11 @@ def render_assistant() -> None:
                 answer = None if user["is_doctor"] else _status_answer(prompt, st.session_state.user["id"])
                 if not answer and gemini_available():
                     try:
-                        answer = _reply(st.session_state.chat_messages)
+                        answer = _reply(st.session_state.chat_messages, user["is_doctor"])
                     except Exception as exc:
                         answer = gemini_error_message(exc)
                 if not answer:
-                    answer = _local_answer(prompt) or (
+                    answer = _local_answer(prompt, user["is_doctor"]) or (
                         "AHEAD Assistant is not available right now (no Gemini API key or the service could not be "
                         "reached). Try one of the suggested questions above — the screening tools work normally without me."
                     )

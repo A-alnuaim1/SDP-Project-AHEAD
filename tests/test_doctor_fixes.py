@@ -22,6 +22,11 @@ from ahead.pages.medications import refresh_medication_notifications
 APP=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),'app.py')
 
 
+def readable(day):
+    """A local date as the doctor pages show it, e.g. '4 Nov 2026'."""
+    return f'{day.day} {day:%b %Y}'
+
+
 @contextmanager
 def clock(text):
     """Pretend the Dubai wall clock reads text ('YYYY-MM-DD HH:MM') for stamps and due checks."""
@@ -183,14 +188,15 @@ class DoctorFixTests(DoctorFixture):
         self.assertEqual(len(plans(self.p['id'])),1)
         self.assertIn('No changes to save.',[i.value for i in at.info])
         self.assertEqual(sum('created a plan' in n['description'] for n in notifications(self.p['id'])),1)
-        status_buttons=lambda:[b.label for b in at.button if b.label in ('Pause','Resume','Stop')]
-        self.assertEqual(status_buttons(),['Pause','Stop'])
+        # Stop sits in a confirmation popover, so its button reads 'Stop this plan'.
+        status_buttons=lambda:[b.label for b in at.button if b.label in ('Pause','Resume','Stop this plan')]
+        self.assertEqual(status_buttons(),['Pause','Stop this plan'])
         next(b for b in at.button if b.label=='Pause').click().run()
         self.assertFalse(at.exception,[e.message for e in at.exception])
         self.assertEqual((plans(self.p['id'])[0]['status'],plan_box().value),('paused',saved[0]['id']))
         self.assertIn('Lisinopril is now paused; the patient was notified.',[s.value for s in at.success])
-        self.assertEqual(status_buttons(),['Resume','Stop'])
-        next(b for b in at.button if b.label=='Stop').click().run()
+        self.assertEqual(status_buttons(),['Resume','Stop this plan'])
+        next(b for b in at.button if b.label=='Stop this plan').click().run()
         self.assertEqual((plans(self.p['id'])[0]['status'],plan_box().value,status_buttons()),('stopped',saved[0]['id'],[]))
         form=['Medication name','Dosage','Instructions','Exact times (HH:MM, comma separated)','Scheduled days','Start date','End date','Doctor notes']
         widgets=lambda:[w for w in [*at.text_input,*at.text_area,*at.multiselect,*at.date_input] if w.label in form]
@@ -270,6 +276,9 @@ class PatientIntelligenceTests(DoctorFixture):
     def xaxis(self,at,title):
         axis=next(json.loads(c.proto.spec)['layout']['xaxis'] for c in at.get('plotly_chart') if json.loads(c.proto.spec)['layout'].get('title',{}).get('text')==title)
         return axis.get('type'),axis.get('dtick')
+    def tiles(self,at):
+        html='\n'.join(h.proto.body for h in at.get('html'))
+        return dict(re.findall(r'class="summary-label">([^<]+)</span><strong class="summary-value">(\d+)',html))
     def chart_titles(self,at):
         return [json.loads(c.proto.spec)['layout'].get('title',{}).get('text') for c in at.get('plotly_chart')]
 
@@ -297,27 +306,28 @@ class PatientIntelligenceTests(DoctorFixture):
         # Before 04:00 in Dubai the UTC date is still the previous day.
         ids=[self.screening('diabetes','GradientBoosting',.4,local) for local in (f'{week} 02:00',f'{today} 01:30',f'{today} 01:45')]
         at=self.page(self.d,'intelligence')
-        self.assertEqual({m.label:m.value for m in at.metric if m.label in ('Today','This week')},{'Today':'2','This week':'3'})
-        self.assertEqual(self.frame(at,'Classification')['Date'].tolist(),[str(today),str(today),str(week)])
-        self.assertEqual(self.frame(at,'ID')['Date'].tolist(),[f'{today} 01:45',f'{today} 01:30',f'{week} 02:00'])
-        self.assertEqual(next(s for s in at.selectbox if s.label=='Open historical assessment').options[0],f'{today} 01:45 · Diabetes · ID {ids[2]}')
-        self.assertTrue(any(m.value.startswith(f'Latest recorded assessment: Diabetes on {today},') for m in at.markdown))
+        tiles=self.tiles(at)
+        self.assertEqual((tiles['Today'],tiles['Last 7 days']),('2','3'))
+        self.assertEqual([d.date() for d in self.frame(at,'Condition')['Date']],[today,today,week])
+        self.assertEqual([d.strftime('%Y-%m-%d %H:%M') for d in self.frame(at,'ID')['Date']],[f'{today} 01:45',f'{today} 01:30',f'{week} 02:00'])
+        self.assertEqual(next(s for s in at.selectbox if s.label=='Open historical assessment').options[0],f'{readable(today)}, 01:45 · Diabetes · ID {ids[2]}')
+        self.assertTrue(any(f'**Diabetes**: Gradient boosting score 40.0% (not flagged) on {readable(today)}, 01:45;' in m.value for m in at.markdown))
 
     def test_doctor_views_use_readable_names(self):
         self.screening('kidney','RandomForest',.2,f'{local_today()-timedelta(days=1)} 09:00');self.screening('diabetes','GradientBoosting',.4)
         event(self.p['id'],'food_saved')
         at=self.page(self.d,'intelligence')
-        self.assertEqual(self.frame(at,'ID')['Disease'].tolist(),['Diabetes','Kidney Health'])
+        self.assertEqual(self.frame(at,'ID')['Condition'].tolist(),['Diabetes','Kidney Health'])
         history=next(json.loads(c.proto.spec) for c in at.get('plotly_chart') if 'Assessment history' in json.loads(c.proto.spec)['layout'].get('title',{}).get('text',''))
-        self.assertEqual(sorted(t['name'] for t in history['data']),['Diabetes · GradientBoosting','Kidney Health · RandomForest'])
+        self.assertEqual(sorted(t['name'] for t in history['data']),['Diabetes · Gradient boosting','Kidney Health · Random forest'])
         self.assertEqual(self.frame(at,'Threshold (%)')['Patient'].tolist(),[f"p@test.com (ID {self.p['id']})"])
-        self.assertTrue(any(c.value.startswith(f'Recorded patient activity on {local_today()}: Meal saved 1.') for c in at.caption))
+        self.assertTrue(any(c.value.startswith(f'Recorded patient activity on {readable(local_today())}: Meal saved 1.') for c in at.caption))
 
     def test_records_chart_needs_two_distinct_minutes(self):
         self.screening('diabetes','GradientBoosting',.4,f'{local_today()} 10:15');self.screening('kidney','RandomForest',.2,f'{local_today()} 10:15')
         at=self.page(self.d,'intelligence')
         self.assertFalse([t for t in self.chart_titles(at) if t and 'Assessment history' in t])
-        self.assertIn(f'All 2 assessments were saved at {local_today()} 10:15; the history chart appears once they span more than one minute.',[c.value for c in at.caption])
+        self.assertIn(f'All 2 assessments were saved at {readable(local_today())}, 10:15; the history chart appears once they span more than one minute.',[c.value for c in at.caption])
 
     def test_activity_counts_cover_every_event_in_the_dubai_30_day_window(self):
         q=self.patient('q@test.com','Q');r=self.patient('r@test.com','R',link=False);s=self.patient('s@test.com','S')
@@ -341,18 +351,17 @@ class PatientIntelligenceTests(DoctorFixture):
         for _ in range(2):event(self.p['id'],'login')
         for _ in range(520):event(q['id'],'food_saved')
         at=self.page(self.d,'intelligence')
-        html='\n'.join(h.proto.body for h in at.get('html'))
-        tile=lambda label:re.search(rf'>{label}</span><strong>(\d+)</strong>',html).group(1)
-        self.assertEqual((tile(r'Active \(30 days\)'),tile('Returning')),('2','1'))
-        self.assertTrue(any(c.value.startswith(f'Recorded patient activity on {local_today()}: Meal saved 520, Sign-in 2.') for c in at.caption))
+        tiles=self.tiles(at)
+        self.assertEqual((tiles['Active (30 days)'],tiles['Returning']),('2','1'))
+        self.assertTrue(any(c.value.startswith(f'Recorded patient activity on {readable(local_today())}: Meal saved 520, Sign-in 2.') for c in at.caption))
 
     def test_trends_need_two_days(self):
         self.screening('diabetes','GradientBoosting',.4);self.screening('diabetes','GradientBoosting',.6);event(self.p['id'],'login')
         at=self.page(self.d,'intelligence')
         self.assertFalse({'Saved assessment activity','Assessments over time','Recorded patient activity'}&set(self.chart_titles(at)))
         captions=[c.value for c in at.caption]
-        for title in ('Saved assessment activity','Assessments over time'):self.assertIn(f'{title}: 2 assessments, all on {local_today()}. The trend appears once assessments span two or more days.',captions)
-        self.assertTrue(any(c.startswith(f'Recorded patient activity on {local_today()}: Sign-in 1.') for c in captions))
+        for title in ('Saved assessment activity','Assessments over time'):self.assertIn(f'{title}: 2 assessments, all on {readable(local_today())}. The trend appears once assessments span two or more days.',captions)
+        self.assertTrue(any(c.startswith(f'Recorded patient activity on {readable(local_today())}: Sign-in 1.') for c in captions))
         self.screening('diabetes','GradientBoosting',.5,f'{local_today()-timedelta(days=1)} 12:00')
         with connection() as db:db.execute("UPDATE activity_events SET created_at=?",((datetime.now(timezone.utc)-timedelta(days=1)).isoformat(),))
         event(self.p['id'],'login')
@@ -366,7 +375,8 @@ class PatientIntelligenceTests(DoctorFixture):
     def test_data_quality_reports_success_only_after_checking_data(self):
         create_user('e@test.com','safe-password-123','Doctor','Dr Empty')
         at=self.page(authenticate('e@test.com','safe-password-123','Doctor'),'intelligence')
-        self.assertEqual((len(at.success),[i.value for i in at.info].count(NO_PATIENTS),len(at.info)),(0,6,6))
+        # The seventh info is the page's standing note about who appears here.
+        self.assertEqual((len(at.success),[i.value for i in at.info].count(NO_PATIENTS),len(at.info)),(0,6,7))
         at=self.page(self.d,'intelligence')
         self.assertEqual(len(at.success),0)
         self.assertTrue(any('nothing to check' in i.value for i in at.info))

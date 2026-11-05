@@ -131,10 +131,6 @@ def missing_inputs_profile(disease: str, model_name: str, missing: list) -> dict
             "test_negatives": data.get("test_counts", {}).get("negative")}
 
 
-def n_samples(disease: str) -> int:
-    return int(meta(disease).get("n_samples", 0))
-
-
 def model_reason(disease: str) -> str:
     """Why the recommended model was chosen — derived from the metadata, not hard-coded."""
     info = meta(disease)

@@ -196,6 +196,17 @@ def pretty_label(feature: str) -> str:
     return FIELD_LABELS.get(feature, feature.replace("_", " ").title())
 
 
+# Models are stored by class name; screens and reports show them as words.
+MODEL_NAMES = {"GradientBoosting": "Gradient boosting", "RandomForest": "Random forest",
+               "LogisticRegression": "Logistic regression", "SVM": "Support vector machine",
+               "DecisionTree": "Decision tree", "XGBoost": "XGBoost"}
+
+
+def model_label(name: str) -> str:
+    """A stored model class name as people read it ('GradientBoosting' -> 'Gradient boosting')."""
+    return MODEL_NAMES.get(name, name)
+
+
 # =============================================================================
 # NAVIGATION
 # =============================================================================

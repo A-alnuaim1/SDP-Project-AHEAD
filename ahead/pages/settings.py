@@ -106,7 +106,7 @@ def _profile_tab(user: dict) -> None:
 def _appearance_tab() -> None:
     _panel("Display mode", "Choose between a bright clinical interface and a darker low-light interface.")
     current = appearance_mode()
-    columns = st.columns(3)
+    columns = st.columns(len(APPEARANCE_OPTIONS))
     for column, (mode, (css, copy)) in zip(columns, APPEARANCE_OPTIONS.items()):
         active = mode == current
         with column:
@@ -129,7 +129,7 @@ def _appearance_tab() -> None:
 
 
 def _preferences_tab() -> None:
-    _panel("Display preferences", "Notification delivery is not available in this prototype.")
+    _panel("Notifications", "Notification delivery is not available in this prototype.")
     with st.container(key="settings_rows"):
         st.info("No email, text or push notifications are sent.")
 
@@ -152,7 +152,7 @@ def _preferences_tab() -> None:
         with st.form('grant_doctor'):
             address=st.text_input('Doctor account email')
             if st.form_submit_button('Add doctor'):
-                if grant_doctor(user['id'],address):st.success('Doctor linked.');st.rerun()
+                if grant_doctor(user['id'],address):st.toast('Doctor linked.');st.rerun()  # st.success would vanish in the rerun
                 else:st.error('No doctor account found with this email.')
         for doctor in doctors_for(user['id']):
             st.write(f"{doctor['name']} · {doctor['email']}")
@@ -167,7 +167,7 @@ def _preferences_tab() -> None:
     if user := st.session_state.get("user"):
         if user["role"] == "Doctor" and st.button("Delete my saved clinical records", type="secondary"):
             delete_records(user["id"])
-            st.success("Your clinical review records were deleted.")
+            st.toast("Your clinical review records were deleted.")
             st.rerun()
 
 
@@ -224,7 +224,8 @@ def _account_tab(user: dict) -> None:
 
 def render_settings() -> None:
     user = current_user()
-    page_header('Your account','Settings','Personalize your experience, privacy and care team access.')
+    page_header('Your account','Settings','Manage your profile, appearance, data and sign-in.' if user['is_doctor']
+                else 'Personalize your experience, privacy and care team access.')
     with st.container(key="settings_tabs"):
         profile, appearance, preferences, account = st.tabs(["Profile", "Appearance", "Preferences", "Account"])
     with profile:

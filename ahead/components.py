@@ -11,7 +11,7 @@ from html import escape
 
 import streamlit as st
 
-from ahead.config import DISCLAIMER_TEXT, DISEASES, ROLE_DOCTOR, ROLE_PATIENT
+from ahead.config import DISCLAIMER_TEXT, DISEASES, ROLE_DOCTOR, ROLE_PATIENT, model_label
 from ahead.resources import available_models, best_model, decision_threshold, features, icon_uri, load_pipeline, model_reason
 from ahead.storage import save_screening
 
@@ -147,19 +147,9 @@ def section_heading(title: str, subtitle: str = "") -> None:
     st.html(f'<div class="section-heading"><h2>{escape(title)}</h2>{sub}</div>')
 
 
-def kpi_card(label: str, value: str, note: str, icon: str, tone: str = "") -> None:
-    st.html(
-        f"""
-<div class="metric-card">
-    <div class="metric-icon {tone}">{icon}</div>
-    <div>
-        <div class="metric-label">{escape(label)}</div>
-        <div class="metric-value">{escape(str(value))}</div>
-        <div class="metric-foot">{escape(note)}</div>
-    </div>
-</div>
-"""
-    )
+def markdown_literal(text: str) -> str:
+    """Escape Markdown punctuation so user text (names, uploaded IDs) shows literally in Markdown and widget labels."""
+    return re.sub(r"([!-/:-@\[-`{-~])", r"\\\1", str(text))
 
 
 def disclaimer(text: str = DISCLAIMER_TEXT, label: str = "Medical disclaimer") -> None:
@@ -170,7 +160,7 @@ def empty_state(icon: str, title: str, text: str) -> None:
     st.html(
         f"""
 <div class="ahead-card empty-state">
-    <div class="big">{icon}</div>
+    <div class="big" aria-hidden="true">{icon}</div>
     <strong>{escape(title)}</strong>
     {escape(text)}
 </div>
@@ -214,17 +204,33 @@ def stepper(active: int) -> None:
     st.html(f'<div class="stepper">{items}</div>')
 
 
-def result_card(prediction: int, probability: float, disease_label: str, model_name: str, threshold: float) -> None:
+def result_card(prediction: int, probability: float, disease_label: str, model_name: str, threshold: float,
+                audience: str = "patient", subject: str = "This record's values", status: str = "") -> None:
+    """The screening result box. audience="doctor" describes *subject* (the record, or values entered on
+    Screenings) and the patient in the third person, titled Flagged / Not flagged like the rest of the doctor UI;
+    a record's *status* (e.g. Reviewed) replaces that word so the card agrees with the record label and queue."""
     elevated = prediction == 1
     css = "result-elevated" if elevated else "result-lower"
     title = "Elevated Risk Pattern" if elevated else "Lower Predicted Risk"
-    text = (
-        f"The screening model identified a pattern associated with elevated {disease_label} risk. "
-        "This result is intended for early awareness and does not confirm that you have the condition."
-        if elevated
-        else f"Your entered information did not meet the model's classification level for elevated "
-        f"{disease_label} risk. This does not rule out disease or replace routine screening."
-    )
+    if audience == "doctor":
+        model_name = model_label(model_name)
+        title = (f"{status or 'Flagged'} · elevated risk pattern" if elevated
+                 else f"{status or 'Not flagged'} · lower predicted risk")
+        text = (
+            f"{subject} matched a pattern associated with elevated {disease_label} risk; this is not a "
+            "diagnosis and does not confirm that the patient has the condition."
+            if elevated
+            else f"{subject} did not reach the model's classification level for elevated {disease_label} "
+            "risk. This does not rule out disease or replace routine screening for the patient."
+        )
+    else:
+        text = (
+            f"The screening model identified a pattern associated with elevated {disease_label} risk. "
+            "This result is intended for early awareness and does not confirm that you have the condition."
+            if elevated
+            else f"Your entered information did not meet the model's classification level for elevated "
+            f"{disease_label} risk. This does not rule out disease or replace routine screening."
+        )
     st.html(
         f"""
 <div class="result-card {css}">
@@ -243,31 +249,36 @@ def result_card(prediction: int, probability: float, disease_label: str, model_n
 # MODEL SELECTOR (shared by the patient predictor and the clinical dashboard)
 # =============================================================================
 
+
+
 def model_selector(disease: str, key: str, label: str = "Prediction model", blank_labs: bool = False):
     """
     Selectbox of benchmark models (recommended first) + explanation expander.
     Returns (pipeline, model_name, threshold).  Falls back to the recommended
     model if the chosen pickle has not been trained yet. *blank_labs* mentions the
     lower threshold some models use when optional lab values are left blank.
+    Doctors read the models by name, as in the queue, the result card and Patient Intelligence.
     """
     recommended = best_model(disease)
     choices = available_models(disease) or [recommended]
+    shown = model_label if current_user()["is_doctor"] else str
     name = st.selectbox(
         label,
         choices,
-        format_func=lambda n: f"{n} — Recommended" if n == recommended else n,
+        format_func=lambda n: f"{shown(n)} — Recommended" if n == recommended else shown(n),
         key=key,
     )
     pipeline = load_pipeline(disease, name)
     if pipeline is None:
         st.warning(
-            f"{name} has not been saved yet — run `python train_model.py` to train every benchmark model. "
-            f"Using {recommended} for now."
+            f"{shown(name)} has not been saved yet — run `python train_model.py` to train every benchmark model. "
+            f"Using {shown(recommended)} for now."
         )
         name = recommended
         pipeline = load_pipeline(disease, recommended)
     with st.expander("Why does AHEAD recommend this model?"):
-        st.write(model_reason(disease))
+        reason = model_reason(disease)  # opens with the recommended model's class name
+        st.write(reason.replace(recommended, shown(recommended), 1))
         st.caption(
             "Alternative models are available for comparison and research. The recommended model "
             "remains the default and is the only one with a tuned decision threshold"

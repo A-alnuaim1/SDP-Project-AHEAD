@@ -10,9 +10,9 @@
 .home-hero h1,.home-hero p,.home-eyebrow,.hero-badge,.hero-badge small {color:white!important;}
 .home-hero h1 {font-size:clamp(1.7rem,3vw,2.6rem);}
 .hero-badge {background:#ffffff18;border:1px solid #ffffff35;border-radius:20px;padding:20px;}
-.visual-metric,.goal-card,.score-panel,.metric-card {border-radius:20px;background:var(--ahead-card);border:1px solid var(--ahead-border);padding:22px;box-shadow:0 6px 24px #102a5308;transition:transform .2s,box-shadow .2s;}
+.visual-metric,.goal-card,.score-panel {border-radius:20px;background:var(--ahead-card);border:1px solid var(--ahead-border);padding:22px;box-shadow:0 6px 24px #102a5308;transition:transform .2s,box-shadow .2s;}
 .visual-metric {border-top:4px solid var(--visual-color);background:linear-gradient(130deg,color-mix(in srgb,var(--visual-color) 9%,var(--ahead-card)),var(--ahead-card));min-height:174px;}
-.visual-metric:hover,.goal-card:hover,.metric-card:hover,.ahead-card:hover {transform:translateY(-3px);box-shadow:0 14px 32px #102a5314;}
+.visual-metric:hover,.goal-card:hover,.ahead-card:hover {transform:translateY(-3px);box-shadow:0 14px 32px #102a5314;}
 .visual-label {display:block;font-size:.82rem;font-weight:650;color:var(--ahead-text);margin:10px 0 6px;}
 .visual-metric strong,.goal-card strong {display:block;font-size:1.9rem;line-height:1.2;color:var(--ahead-title);}
 .visual-metric small,.goal-card small {display:block;color:var(--ahead-muted);font-size:.76rem;margin-top:8px;}
@@ -75,6 +75,30 @@
 [class*="_summary_card"] [data-testid="stElementContainer"]:has(> .stButton) {position:absolute;inset:0;z-index:2;margin:0!important;}
 [class*="_summary_card"] .stButton,[class*="_summary_card"] .stButton button {width:100%!important;height:100%!important;}
 [class*="_summary_card"] .stButton button {opacity:0;cursor:pointer;}
+/* doctor home: hero actions on the gradient (white primary, glass secondary, like the patient hero) */
+.st-key-home_hero .st-key-hero_intelligence button {background:#FFFFFF!important;color:#0D304B!important;border:1px solid #FFFFFF!important;box-shadow:0 8px 20px rgba(0,0,0,.18)!important;}
+.st-key-home_hero .st-key-hero_intelligence button:hover {background:#E9F6F7!important;filter:none;}
+.st-key-home_hero .st-key-hero_upload button {background:rgba(255,255,255,.1)!important;color:#FFFFFF!important;border:1px solid rgba(255,255,255,.35)!important;}
+.st-key-home_hero .st-key-hero_upload button:hover {background:rgba(255,255,255,.18)!important;border-color:#FFFFFF!important;color:#FFFFFF!important;}
+/* doctor home "Needs your attention": one tinted row per patient; the row wraps on phones and the Open button stays visible */
+[class*="st-key-attention_row_"] {--tone:var(--ahead-danger);padding:12px 16px!important;border-radius:16px;gap:10px 14px!important;align-items:center!important;background:color-mix(in srgb,var(--tone) 6%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--tone) 26%,var(--ahead-card));border-inline-start:4px solid var(--tone);}
+[class*="st-key-attention_row_dose"] {--tone:var(--ahead-warning);}
+[class*="st-key-attention_row_"] > [data-testid="stElementContainer"]:has(.attention-main) {flex:1 1 280px!important;min-width:0!important;width:auto!important;}
+[class*="st-key-attention_row_"] > [data-testid="stElementContainer"]:has(.stButton) {flex:0 0 auto!important;width:auto!important;margin-inline-start:auto;}
+.attention-main {display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;}
+.attention-avatar {width:42px;height:42px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.86rem;font-weight:760;background:color-mix(in srgb,var(--tone) 16%,var(--ahead-card));color:color-mix(in srgb,var(--tone) 55%,var(--ahead-title));}
+.attention-text {flex:1 1 200px;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.attention-name {font-size:.95rem;font-weight:720;color:var(--ahead-title);overflow-wrap:anywhere;}
+.attention-detail {font-size:.8rem;line-height:1.45;color:var(--ahead-text);overflow-wrap:anywhere;}
+.attention-pills {display:flex;flex-wrap:wrap;gap:6px;}
+.attention-pill {--pill:var(--ahead-danger);font-size:.74rem;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap;background:color-mix(in srgb,var(--pill) 14%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--pill) 34%,var(--ahead-card));color:color-mix(in srgb,var(--pill) 55%,var(--ahead-title));}
+.attention-pill.dose {--pill:var(--ahead-warning);}
+/* the calm card (nothing to review) and its neutral variant (no linked patients yet); the palette green, as on the summary cards, tints the card and its icon */
+.attention-calm {--calm:#2E9477;display:flex;align-items:center;gap:14px;padding:16px 18px;border-radius:16px;background:color-mix(in srgb,var(--calm) 8%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--calm) 30%,var(--ahead-card));}
+.attention-calm.neutral {--calm:#8E7CC3;}
+.attention-calm .summary-icon {flex:none;--tone:var(--calm);}
+.attention-calm strong {display:block;font-size:.95rem;font-weight:720;color:var(--ahead-title);}
+.attention-calm p {margin:2px 0 0;font-size:.8rem;line-height:1.45;color:var(--ahead-text);}
 /* home "This week" strip */
 .st-key-food_day {container:food-day / inline-size;background:linear-gradient(130deg,color-mix(in srgb,#0E9AA7 8%,var(--ahead-card)),var(--ahead-card));border:2px solid #C98F1E;border-radius:17px;padding:18px 20px!important;gap:16px!important;}
 /* arrows stay either side of the date; on narrow cards "Pick a day" drops to its own line instead */
@@ -165,8 +189,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible 
 .action-card {border-inline-start:4px solid var(--ahead-accent);background:var(--ahead-card);border-radius:16px;}
 .action-number {background:var(--ahead-accent-soft)!important;color:var(--ahead-accent-strong)!important;}
 .result-card {border-radius:22px!important;box-shadow:var(--ahead-shadow);}
-.result-elevated {border-inline-start:5px solid #C75D5D!important;}
-.result-lower {border-inline-start:5px solid #2E9477!important;}
+.result-elevated {border-inline-start:5px solid var(--ahead-danger)!important;}
+.result-lower {border-inline-start:5px solid var(--ahead-success)!important;}
 [data-testid="stDataFrame"] {border-radius:16px;overflow:hidden;border:1px solid var(--ahead-border);}
 @keyframes ring-entry {from {stroke-dashoffset:100;} to {stroke-dashoffset:var(--ring-offset);}}
 @keyframes progress-entry {from {transform:scaleX(0);} to {transform:scaleX(1);}}
@@ -182,3 +206,15 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible 
 .assistant-trait {background:var(--ahead-card)!important;border:1px solid var(--ahead-border);border-radius:20px!important;}
 [data-testid="stChatMessage"] {border:1px solid var(--ahead-border);border-radius:20px;background:var(--ahead-card);}
 [data-testid="stSidebar"] .sidebar-section-label {color:#8FB0C0!important;font-size:.64rem;letter-spacing:.13em;margin-top:15px;}
+/* Patient Intelligence: the Stop-plan confirm is a real button, not a popover menu row */
+[data-testid="stPopoverBody"] [class*="st-key-plan_stop_"] {gap:12px!important;max-width:320px;}
+[data-testid="stPopoverBody"] [class*="st-key-plan_stop_"] [data-testid="stElementContainer"] {border-bottom:none!important;}
+[data-testid="stPopoverBody"] [class*="st-key-plan_stop_"] .stButton > button {justify-content:center!important;min-height:40px;background:color-mix(in srgb,var(--ahead-danger) 75%,#000)!important;color:#FFFFFF!important;border-radius:999px!important;}
+[data-testid="stPopoverBody"] [class*="st-key-plan_stop_"] .stButton > button:hover {background:color-mix(in srgb,var(--ahead-danger) 75%,#000)!important;color:#FFFFFF!important;filter:brightness(1.1);}
+[data-testid="stPopoverBody"] [class*="st-key-plan_stop_"] .stButton > button > div {justify-content:center!important;}
+[data-testid="stPopoverBody"] [class*="st-key-plan_stop_"] .stButton > button::after {content:none;}
+/* Patient Intelligence: the score-change metric drawn like a summary tile */
+[data-testid="stMain"] .st-key-score_change [data-testid="stMetric"] {--tone:#5B8FA3;border-radius:18px;background:color-mix(in srgb,var(--tone) 8%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--tone) 28%,var(--ahead-card));}
+[data-testid="stMain"] .st-key-score_change [data-testid="stMetricLabel"] p {font-size:.84rem!important;font-weight:700;color:color-mix(in srgb,var(--tone) 55%,var(--ahead-title))!important;}
+[data-testid="stMain"] .st-key-score_change [data-testid="stMetricValue"] {font-size:1.7rem;font-weight:760;}
+[data-testid="stPopoverBody"] [class*="st-key-plan_stop_"] p {color:var(--ahead-text)!important;}

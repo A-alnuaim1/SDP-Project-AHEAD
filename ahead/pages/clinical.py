@@ -2,13 +2,16 @@
 
 import hashlib
 import json
+import math
+from html import escape
 
 import pandas as pd
 import streamlit as st
 
-from ahead.clinical_data import dob_age, prepare_upload, validate_row
-from ahead.visuals import metric
-from ahead.components import current_user, model_selector, page_header, result_card
+from ahead.clinical_data import dob_age, issue_text, prepare_upload, shown_value, validate_row
+from ahead.visuals import summary_tile
+from ahead.components import (current_user, empty_state, markdown_literal, model_label, model_selector, page_header, result_card,
+                              section_heading)
 from ahead.config import DISEASES, pretty_label
 from ahead.reports import patient_report
 from ahead.resources import feature_summary, features, final_metrics, predict_probability, validation_results, best_model
@@ -18,32 +21,65 @@ from ahead.platform_data import append_record_prediction, record_prediction_hist
 
 ID_COLUMNS = ["PatientID", "patient_id", "Patient ID", "ID", "id"]
 MAX_ROWS = 5000
+SOURCES = {"batch": "Cohort scoring", "corrected": "Corrected record"}
+# A datetime column (not preformatted text) so a header click sorts chronologically.
+LOCAL_TIME = {"Date": st.column_config.DatetimeColumn(format="D MMM YYYY, HH:mm")}
+
+
+def _when(stamp):
+    moment = to_local(stamp)
+    return f"{moment.day} {moment:%b %Y, %H:%M}"
+
+
+def _issues(issues):
+    return " · ".join(map(issue_text, issues))
+
+
+def _status(record):
+    """The status the doctor reads: a record scored below the threshold is 'Not flagged', not 'Ready' (unscored).
+    Display only; the stored status stays 'Ready'."""
+    return "Not flagged" if record["status"] == "Ready" and record["score"] is not None else record["status"]
+
+
+def _editable(feature, value, info):
+    """A stored value as the record editor shows it: words for 0/1 answers and categories, whole numbers without
+    '.0'. Other numbers stay unrounded, so saving the record back never changes them."""
+    if value is None:
+        return ""
+    whole = isinstance(value, (int, float)) and math.isfinite(value) and float(value).is_integer()
+    return shown_value(feature, value, info) if whole or info["kind"] == "category" else str(value)
+
+
+def _cohort_label(records):
+    """'heart_a.csv · 4 Nov 2026, 14:05 · 6 rows'; cohorts saved before file names were kept read 'Upload · …'."""
+    first, count = min(records, key=lambda r: r["created_at"]), len(records)
+    return f"{first.get('source_name') or 'Upload'} · {_when(first['created_at'])} · {count} row{'s' if count != 1 else ''}"
 
 
 def _upload():
     file = st.file_uploader("Upload patient records", type=["csv", "xlsx"],
                             help="Use fictional or de-identified records for this prototype.")
     if file is None:
-        return None, None
+        return None, None, None
     raw = file.getvalue()
     if len(raw) > 15 * 1024 * 1024:
         st.error("File exceeds the 15 MB upload limit.")
-        return None, None
+        return None, None, None
     try:
         # Text cells keep IDs such as 00042 intact (no lost zeros or '.0'); validation parses the numbers.
         frame = pd.read_csv(file, dtype=str) if file.name.lower().endswith(".csv") else pd.read_excel(file, dtype=str)
     except Exception:  # corrupt, encrypted or mislabelled files fail in many parser-specific ways
         st.error("Could not read this file. Check the CSV/XLSX format.")
-        return None, None
+        return None, None, None
     if frame.empty or len(frame) > MAX_ROWS:
         st.error(f"Upload between 1 and {MAX_ROWS:,} patient rows.")
-        return None, None
-    return frame, hashlib.sha256(raw).hexdigest()[:16]
+        return None, None, None
+    return frame, hashlib.sha256(raw).hexdigest()[:16], file.name[:120]
 
 
 def _intake(owner_id, disease, required, stats):
-    st.subheader("1 · Import and check records")
-    st.caption("Age may be omitted at upload. Provide DOB to calculate it, or enter age during individual review.")
+    section_heading("1 · Import and check records", "Age may be omitted at upload. Provide DOB to calculate it, "
+                    "or enter age during individual review.")
     with st.expander("Required model columns"):
         st.code(", ".join(required), language=None)
     age_key = "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
@@ -55,7 +91,7 @@ def _intake(owner_id, disease, required, stats):
                 info["mode"] if info["binary"] else round(info["median"], 2))
     st.download_button("Download example upload template", pd.DataFrame([example]).to_csv(index=False).encode(),
                        file_name=f"ahead_{disease}_template.csv", mime="text/csv")
-    frame, fingerprint = _upload()
+    frame, fingerprint, name = _upload()
     if frame is None:
         return
     try:
@@ -64,32 +100,35 @@ def _intake(owner_id, disease, required, stats):
         st.error(str(error))
         return
     preview = pd.DataFrame([{
-        "Row": i, "Patient": item["patient_id"], "Status": "Ready" if not item["issues"] else "Needs correction",
-        "Issues": "; ".join(item["issues"]),
+        "Row": i, "Patient": item["patient_id"], "Status": "Ready" if not item["issues"] else "Incomplete",
+        "Issues": _issues(item["issues"]),
     } for i, item in enumerate(rows, 1)])
     st.dataframe(preview, width="stretch", hide_index=True, height=250)
-    st.caption(f"{len(rows) - sum(bool(r['issues']) for r in rows)} ready · "
-               f"{sum(bool(r['issues']) for r in rows)} needing correction. No rows are scored during import.")
+    incomplete = sum(bool(r["issues"]) for r in rows)
+    st.caption(f"{len(rows) - incomplete} ready · {incomplete} incomplete. No rows are scored during import.")
     if st.button("Save records to review queue", type="primary", key="clinical_import"):
         cohort = f"{disease}-{fingerprint}"
         if any(r["cohort"] == cohort for r in list_records(owner_id, disease)):
-            st.warning("This file is already in your review queue.")
+            st.info("This file is already in your review queue.")
         else:
-            insert_records(owner_id, cohort, disease, rows)
-            st.success("Records saved. Review incomplete rows before screening.")
+            insert_records(owner_id, cohort, disease, rows, source_name=name)
+            st.session_state[f"clinical_cohort_{disease}"] = cohort  # open the queue on the new upload
+            st.toast(f"Records saved: {len(rows) - incomplete} ready, {incomplete} incomplete." if incomplete
+                     else "Records saved. All rows are ready to score.")
             st.rerun()
 
 
 def _edit_record(record, owner_id, disease, required, stats, pipeline, model_name, threshold):
     values, issues = json.loads(record["values_json"]), json.loads(record["issues_json"])
-    st.markdown(f"**Record {record['source_row']} · {record['patient_id']}**")
+    st.markdown(f"**Record {record['source_row']} · {markdown_literal(record['patient_id'])}**")
     st.caption("Edit model inputs below. Enter DOB to calculate age automatically.")
-    shown = {f: "" if values.get(f) is None else str(values[f]) for f in required}
-    edited = pd.DataFrame([{"Input": f, "Value": shown[f], **({"Issue": next(
+    # 0/1 answers read Male/Female or No/Yes, as on the patient form; validate_row maps the words back to 0/1.
+    shown = {f: _editable(f, values.get(f), stats[f]) for f in required}
+    edited = pd.DataFrame([{"Field": pretty_label(f), "Input": f, "Value": shown[f], **({"Issue": next(
         (i.split(": ", 1)[1] for i in issues if i.startswith(f + ":")), "")} if issues else {})} for f in required])
     with st.form(f"edit_{record['id']}"):
-        table = st.data_editor(edited, hide_index=True, disabled=["Input", "Issue"], width="stretch",
-                               key=f"record_editor_{record['id']}")
+        table = st.data_editor(edited, hide_index=True, disabled=["Field", "Input", "Issue"], width="stretch",
+                               column_config={"Input": "Upload column"}, key=f"record_editor_{record['id']}")
         dob = st.text_input("Date of birth (YYYY-MM-DD, optional)", value=record["dob"] or "").strip()
         submitted = st.form_submit_button("Save and validate record")
     if submitted:
@@ -130,18 +169,52 @@ def _rerun_after_save():
     st.rerun()
 
 
+def _summary(records):
+    """The cohort at a glance, above the queue: intake on the first row, review progress on the second."""
+    scored = [r for r in records if r["score"] is not None]
+    needs = sum(r["status"] == "Incomplete" for r in records)
+    flagged, reviewed, excluded = (sum(r["status"] == s for r in records) for s in ("Flagged", "Reviewed", "Excluded"))
+    pending = sum(r["status"] not in ("Reviewed", "Excluded") for r in scored)
+    tiles = [("records", "Records", len(records), "Rows in this upload", "#0E9AA7", "uploads"),
+             ("incomplete", "Incomplete", needs, "Missing or invalid inputs" if needs else "All inputs complete",
+              "#C98F1E", "returning"),
+             ("scored", "Scored", len(scored), "Model scores saved" if scored else "None scored yet", "#8E7CC3", "scored",
+              len(records)),
+             ("flagged", "Flagged", flagged, "At or above the threshold, not yet reviewed", "#C9706E", "flagged"),
+             ("pending", "Pending review", pending, "Scored, awaiting a review decision", "#5B8FA3", "calendar"),
+             ("reviewed", "Reviewed", reviewed, f"{excluded} excluded" if excluded else "Review decision saved"
+              if reviewed else "No decisions saved yet", "#2E9477", "review")]
+    for row in (tiles[:3], tiles[3:]):
+        for column, (key, *tile) in zip(st.columns(3), row):
+            with column:
+                summary_tile(f"clinical_{key}", *tile)
+
+
 def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
-    st.subheader("2 · Review and score")
+    section_heading("2 · Review and score", "Score the complete records in one upload, then work through the queue.")
     all_records = list_records(owner_id, disease)
     if not all_records:
-        st.info("Save an upload to create a review queue.")
+        empty_state("◉", "No records in the review queue yet",
+                    "Upload a CSV or Excel file above and save it to start reviewing.")
         return
-    cohorts = list(dict.fromkeys(r["cohort"] for r in all_records))
-    cohort = st.selectbox("Uploaded cohort", cohorts)
-    records = sorted((r for r in all_records if r["cohort"] == cohort), key=lambda r: r["source_row"])
+    groups = {}
+    for r in all_records:
+        groups.setdefault(r["cohort"], []).append(r)
+    # Newest upload first. Labels can repeat across conditions, so the key (not the label) identifies the widget.
+    cohorts = sorted(groups, key=lambda c: min(r["created_at"] for r in groups[c]), reverse=True)
+    labels, seen = {}, {}
+    for c in reversed(cohorts):  # a file corrected and uploaded again within the minute reads '… · upload 2'
+        label = _cohort_label(groups[c])
+        seen[label] = seen.get(label, 0) + 1
+        labels[c] = label if seen[label] == 1 else f"{label} · upload {seen[label]}"
+    cohort = st.selectbox("Uploaded cohort", cohorts, format_func=lambda c: labels.get(c, str(c)),
+                          key=f"clinical_cohort_{disease}")
+    records = sorted(groups[cohort], key=lambda r: r["source_row"])
+    _summary(records)
     ready = [r for r in records if not json.loads(r["issues_json"]) and r["status"] not in ("Excluded", "Reviewed")]
-    if st.button(f"Score {len(ready)} eligible records with {model_name}", disabled=not ready, type="primary"):
-        with st.spinner(f"Checking and scoring {len(ready):,} records with {model_name}…"):
+    if st.button(f"Score {len(ready)} eligible record{'s' if len(ready) != 1 else ''} with {model_label(model_name)}",
+                 disabled=not ready, type="primary"):
+        with st.spinner(f"Checking and scoring {len(ready):,} records with {model_label(model_name)}…"):
             checked = [(r["id"], *validate_row(json.loads(r["values_json"]), disease, required, stats, r["dob"],
                                                to_local(r["created_at"]).date())) for r in ready]
             valid, scored, error = [(i, clean) for i, clean, issues in checked if not issues], [], None
@@ -159,22 +232,23 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
             if not valid:
                 st.toast("No valid records remain after rechecking dates and inputs.")
             _rerun_after_save()
-    rows = [{"Row": r["source_row"], "Patient": r["patient_id"], "Status": r["status"],
+    rows = [{"Row": r["source_row"], "Patient": r["patient_id"], "Status": _status(r),
              "Model score (%)": None if r["score"] is None else round(r["score"] * 100, 1),
-             "Issues": "; ".join(json.loads(r["issues_json"])), "Model": r["model"] or ""}
+             "Issues": _issues(json.loads(r["issues_json"])), "Model": model_label(r["model"] or "")}
             for r in records]
     table = pd.DataFrame(rows)
-    status_filter = st.selectbox("Show", ["All", "Incomplete", "Flagged", "Ready", "Reviewed", "Excluded"])
+    # 'Ready' rows are complete but unscored; 'Not flagged' rows were scored below the threshold.
+    status_filter = st.selectbox("Show", ["All", "Incomplete", "Ready", "Flagged", "Not flagged", "Reviewed", "Excluded"])
     shown = table if status_filter == "All" else table[table["Status"] == status_filter]
-    st.dataframe(shown, width="stretch", hide_index=True, height=320)
+    if shown.empty:
+        st.caption("No records scored below the threshold in this upload." if status_filter == "Not flagged"
+                   else f"No {status_filter.lower()} records in this upload.")
+    else:
+        st.dataframe(shown, width="stretch", hide_index=True, height=320)
     reference = next((m for m in validation_results(disease) if m["model"] == model_name), {})
-    st.info(f"{model_name} validation-set recall {reference.get('recall_disease', 0):.1%}, "
+    st.info(f"{model_label(model_name)} validation-set recall {reference.get('recall_disease', 0):.1%}, "
             f"precision {reference.get('precision_disease', 0):.1%} at a 50% threshold. "
             "These figures may differ at a tuned threshold and on a hospital cohort.")
-    a,b,c=st.columns(3)
-    with a:metric('Records in review',len(records),'Current condition and cohort','#2563EB')
-    with b:metric('Need input review',sum(bool(json.loads(r['issues_json'])) for r in records),'Missing or invalid entered data','#F59E0B')
-    with c:metric('Scored records',sum(r['score'] is not None for r in records),'Available for clinical review','#8B5CF6')
     safe_export = table.copy()
     for column in ("Patient", "Issues", "Model"):
         safe_export[column] = safe_export[column].map(
@@ -182,58 +256,72 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
     st.download_button("Download review queue (CSV)", safe_export.to_csv(index=False).encode("utf-8-sig"),
                        file_name=f"ahead_{disease}_review.csv", mime="text/csv")
 
-    st.subheader("3 · Individual review")
+    section_heading("3 · Individual review", "Correct a record's inputs, read its model output and save a review decision.")
     by_id, key = {r["id"]: r for r in records}, f"clinical_record_{disease}_{cohort}"
     # A stable key keeps the doctor on this record when its status (part of the label) changes; after a save the
     # value is set again so the browser receives the new label (see _rerun_after_save).
     if st.session_state.pop("clinical_record_saved", False) and st.session_state.get(key) in by_id:
         st.session_state[key] = st.session_state[key]
     selected_id = st.selectbox("Record", list(by_id), key=key,
-                               format_func=lambda i: f"Row {by_id[i]['source_row']} · {by_id[i]['patient_id']} · {by_id[i]['status']}")
+                               format_func=lambda i: f"Row {by_id[i]['source_row']} · {by_id[i]['patient_id']} · {_status(by_id[i])}")
     record = by_id[selected_id]
     issues = json.loads(record["issues_json"])
     if issues:
-        st.warning("Correct these inputs before screening: " + "; ".join(issues))
+        st.warning("Correct these inputs before scoring:\n" + "\n".join(f"- {issue_text(i)}" for i in issues))
     if record["status"] == "Incomplete" or st.toggle("Edit this record", key=f"edit_toggle_{selected_id}"):
         _edit_record(record, owner_id, disease, required, stats, pipeline, model_name, threshold)
     values = json.loads(record["values_json"])
     if record["score"] is not None:
         result_card(int(record["score"] >= record["threshold"]), record["score"],
-                    DISEASES[disease]["long_label"], record["model"], record["threshold"])
-        st.caption("A model output, not a diagnosis. Review the measurements and history independently.")
+                    DISEASES[disease]["long_label"], record["model"], record["threshold"], audience="doctor",
+                    status=_status(record))
+        st.caption("Review the measurements and history independently before acting on this model output.")
         metrics = final_metrics(disease) if record["model"] == best_model(disease) else next(
             (m for m in validation_results(disease) if m["model"] == record["model"]), {})
+        factors = identify_risk_factors(disease, values)
+        # The last save of a reviewed or excluded record is the review decision, so its time is the review time.
+        decided = record["status"] in ("Reviewed", "Excluded")
         st.download_button("Download patient PDF", patient_report(disease, record["patient_id"], values,
                            record["score"], record["threshold"], record["model"], metrics,
-                           record["status"] if record["status"] in ("Reviewed", "Excluded") else "", record["note"],
-                           metric_source="test" if record["model"] == best_model(disease) else "validation"),
+                           record["status"] if decided else "", record["note"],
+                           metric_source="test" if record["model"] == best_model(disease) else "validation",
+                           audience="doctor", reviewer=current_user()["name"] if decided else "",
+                           reviewed_at=record["updated_at"] if decided else None,
+                           source=f"{record.get('source_name') or 'Uploaded file'}, row {record['source_row']}", factors=factors),
                            file_name=f"ahead_record_{record['id']}.pdf", mime="application/pdf")
-        factors = identify_risk_factors(disease, values)
         if factors:
-            st.write("Entered values to discuss with a clinician: " + ", ".join(factors))
+            # Not "values above typical ranges": the list also holds history answers such as a previous stroke.
+            st.caption("Risk factors in this record")
+            st.html("".join(f'<span class="factor-chip">{escape(f)}</span>' for f in factors))
         model_for_record = pipeline if record["model"] == model_name else None
         if model_for_record is not None:
             try:
-                local = individual_sensitivity(model_for_record, values, stats)
+                # An entry that reads the same as the typical value once rounded (9.95 vs 9.9515) says nothing here.
+                local = [(f, shown_value(f, v, stats[f]), shown_value(f, base, stats[f]), delta)
+                         for f, v, base, delta in individual_sensitivity(model_for_record, values, stats)]
+                local = [row for row in local if row[1] != row[2]]
                 if local:
                     st.caption("Illustrative model input sensitivity: one input replaced at a time by a typical training value; not a causal explanation.")
-                    st.dataframe(pd.DataFrame([{"Input": pretty_label(f), "Entered": str(v), "Comparison": str(base),
-                                                "Score change (points)": round(delta * 100, 1)}
-                                               for f, v, base, delta in local]), hide_index=True, width="stretch")
+                    st.dataframe(pd.DataFrame([{"Input": pretty_label(f), "Entered": entered, "Typical value": typical,
+                                                "Score change (points)": round(delta * 100, 1) + 0.0}  # no '-0.0'
+                                               for f, entered, typical, delta in local]), hide_index=True, width="stretch")
+                else:
+                    st.info("The entered values match the typical training values, so there is no input comparison to show.")
             except (ValueError, TypeError):
                 st.info("Individual model sensitivity is unavailable for this record.")
     st.dataframe(pd.DataFrame({"Input": [pretty_label(f) for f in required],
-                               "Value": [str(values.get(f) if values.get(f) is not None else "") for f in required]}),
+                               "Value": [shown_value(f, values.get(f), stats[f]) for f in required]}),
                  hide_index=True, width="stretch")
     prediction_history=record_prediction_history(owner_id,selected_id)
     if prediction_history:
         with st.expander('Previous prediction versions'):
-            st.dataframe(pd.DataFrame([{'Date':r['created_at'][:19],'Score (%)':round(r['score']*100,1),
-                'Model':r['model'],'Reason':r['source']} for r in prediction_history]),hide_index=True)
+            st.dataframe(pd.DataFrame([{'Date':to_local(r['created_at']).replace(tzinfo=None),'Score (%)':round(r['score']*100,1),
+                'Model':model_label(r['model']),'Reason':SOURCES.get(r['source'],r['source'].capitalize())} for r in prediction_history]),
+                hide_index=True,column_config=LOCAL_TIME)
     with st.form(f"review_{selected_id}"):
         note = st.text_area("Doctor review note", value=record["note"], max_chars=2000)
         choices = list(dict.fromkeys([record["status"], "Reviewed", "Excluded"]))
-        action = st.selectbox("Review decision", choices)
+        action = st.selectbox("Review decision", choices, format_func=lambda s: _status(record) if s == record["status"] else s)
         if st.form_submit_button("Save review"):
             if action == "Reviewed" and record["score"] is None:
                 st.error("Correct and score this record before marking it reviewed.")

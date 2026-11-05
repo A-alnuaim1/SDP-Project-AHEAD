@@ -4,8 +4,6 @@ ahead/pages/analytics.py
 Dataset explorer and technical model performance per condition.
 """
 
-import re
-
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -13,7 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from ahead.components import page_header, section_heading
-from ahead.config import DISEASES, pretty_label
+from ahead.config import DISEASES, model_label, pretty_label
 from ahead.resources import best_model, features, final_metrics, load_dataset, meta, validation_results
 from ahead.theme import show_chart, style_figure, tokens
 from ahead.visuals import summary_tile
@@ -139,7 +137,7 @@ def render_analytics() -> None:
                      ("positive", "Positive cases", f"{positive:,}", f"{share:.1f}% of records have the condition", "#C9706E", "flagged"),
                      ("features", "Model features", len(model_features), "Inputs the screening form asks for", "#8E7CC3", "review"),
                      # Spaced model names wrap between words instead of being cut off in a narrow card.
-                     ("model", "Recommended model", re.sub(r"(?<=[a-z])(?=[A-Z])", " ", best_model(disease)),
+                     ("model", "Recommended model", model_label(best_model(disease)),
                       "Chosen on the validation results", "#2E9477", "scored")]
             for column, (key, label, value, note, colour, icon) in zip(st.columns(4), tiles):
                 with column:

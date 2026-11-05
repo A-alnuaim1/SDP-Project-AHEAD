@@ -18,7 +18,7 @@ from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, KeepTogether, LayoutError, PageBreak, PageTemplate,
                                 Paragraph, Spacer, Table, TableStyle)
 
-from ahead.config import DISEASES, GENDER_CODED_FIELDS, pretty_label
+from ahead.config import DISEASES, GENDER_CODED_FIELDS, MODEL_NAMES, pretty_label
 from ahead.resources import feature_summary
 
 PAGE_W, PAGE_H = A4
@@ -34,9 +34,6 @@ BLANK_MARKERS = {"n/a", "na", "-", "none", "null", "nan"}   # how CSV exports sp
 # Latin letters with no accent-free decomposition, so _printable keeps them readable (Ł -> L).
 LOOKALIKES = str.maketrans({"Ł": "L", "ł": "l", "ı": "i", "Đ": "D", "đ": "d", "Ħ": "H", "ħ": "h"})
 DUBAI = ZoneInfo("Asia/Dubai")
-MODEL_NAMES = {"GradientBoosting": "Gradient boosting", "RandomForest": "Random forest",
-               "LogisticRegression": "Logistic regression", "SVM": "Support vector machine",
-               "DecisionTree": "Decision tree", "XGBoost": "XGBoost"}
 
 TITLE, TEXT, MUTED, DASH = HexColor("#102A43"), HexColor("#344054"), HexColor("#5B6B80"), HexColor("#9AA6B5")
 BORDER, SOFT, ZEBRA = HexColor("#E1E8EF"), HexColor("#F3F7FA"), HexColor("#F5F8FB")

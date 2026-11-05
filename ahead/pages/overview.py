@@ -1,100 +1,257 @@
 """
 ahead/pages/overview.py
 =======================
-The signed-in home page: hero with quick-start, KPI cards, condition cards,
-session risk distribution and reference-data visuals.
+The signed-in home page. Patients get their personal dashboard; doctors get a
+clinician dashboard built from consent-linked patients: summary cards, the
+patients who need a look, quick screening and the screenings they ran.
 """
 
+import re
+from collections import Counter
+from datetime import datetime, timedelta
 from html import escape
 
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
-from ahead.components import condition_cards, current_user, disclaimer, empty_state, go_to, kpi_card, open_assistant, section_heading
-from ahead.config import DISEASES
-from ahead.platform_data import to_local
-from ahead.resources import best_model, final_metrics, n_samples, validation_results
-from ahead.theme import show_chart, style_figure, tokens
+from ahead.components import condition_cards, current_user, disclaimer, go_to, markdown_literal, open_assistant, section_heading
+from ahead.config import DISEASES, model_label
+from ahead.platform_data import analytics, local_now, local_today, plans, scheduled_doses, to_local
+from ahead.resources import icon_uri
+from ahead.visuals import summary_card
+
+HONORIFIC = re.compile(r"^(?:(?:dr|doctor|prof|mr|mrs|ms)(?:\.\s*|\s+|$))+", re.IGNORECASE)
+# Trailing credentials and suffixes are not surnames ("Layla Hassan MD"); "DO" only in capitals, as Do is also a surname.
+CREDENTIALS = {"md", "mbbs", "mbchb", "phd", "dds", "dmd", "frcs", "frcp", "frcpc", "mrcp", "mrcs", "facp", "facs", "mph", "msc", "jr", "sr", "ii", "iii"}
+# Particles that belong to the family name after them ("Al Mansoori", "Abu Bakr", "bin Rashid", "van der Berg").
+PARTICLES = {"al", "el", "bin", "bint", "ibn", "abu", "abd", "abdul", "abdel", "van", "von", "de", "der", "den", "del", "della", "da", "di", "du", "dos", "das", "la", "le"}
+ATTENTION_ROWS = 5
 
 
-def _risk_distribution_figure(history: list) -> go.Figure:
-    t = tokens()
-    frame = pd.DataFrame(history)
-    bands = frame["prediction"].map({0: "Not flagged", 1: "Flagged"}).value_counts().reindex(
-        ["Not flagged", "Flagged"]).fillna(0)
-    elevated_pct = 100 * (frame["prediction"] == 1).mean()
-    figure = go.Figure(
-        go.Pie(
-            labels=bands.index.tolist(),
-            values=bands.values.tolist(),
-            hole=0.62,
-            marker=dict(colors=[t["success"], t["danger"]]),
-            textinfo="none",
-            sort=False,
+def _focus(tab: str, patient: int | None = None) -> None:
+    """Open Patient Intelligence on one tab (and patient); that page reads intelligence_focus."""
+    st.session_state["intelligence_focus"] = {"tab": tab, "patient": patient}
+    go_to("intelligence")
+
+
+def _name_words(name: str) -> list[str]:
+    """The words of a name without leading titles, a comma or trailing bracket tail, or trailing credentials."""
+    words = re.sub(r"\s*\([^)]*\)?\s*$", "", HONORIFIC.sub("", (name or "").split(",")[0].strip())).split()
+    while words and (words[-1].replace(".", "").lower() in CREDENTIALS or words[-1].replace(".", "") == "DO"):
+        words.pop()
+    return words
+
+
+def _initials(name: str) -> str:
+    letters = [m.group() for m in (re.search(r"[^\W\d_]", w) for w in _name_words(name)) if m]
+    return (letters[0] + letters[-1] if len(letters) > 1 else "".join(letters) or "?").upper()
+
+
+def _greeting_name(name: str) -> str:
+    words = _name_words(name)
+    start = len(words) - 1
+    while start > 1 and words[start - 1].lower() in PARTICLES:  # the first word stays a given name
+        start -= 1
+    return f"Dr. {' '.join(words[start:])}" if words else "Doctor"
+
+
+def _when(moment: datetime, today) -> str:
+    if moment.date() == today:
+        return f"today {moment:%H:%M}"
+    if moment.date() == today - timedelta(days=1):
+        return f"yesterday {moment:%H:%M}"
+    return f"{moment.day} {moment:%b}"
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+def _care_snapshot(doctor_id: int) -> dict:
+    """Linked patients, recent assessment counts and the patients needing a look, newest first."""
+    people, assessments = analytics(doctor_id)
+    today = local_today()
+    rows, week, flagged = {}, 0, 0
+    for a in assessments:  # newest first, so each patient's first flag is their latest
+        moment = to_local(a["created_at"]).replace(tzinfo=None)
+        week += moment.date() > today - timedelta(days=7)
+        if a["prediction"] and moment.date() > today - timedelta(days=30):
+            flagged += 1
+            rows.setdefault(a["owner_id"], {"flags": [], "doses": []})["flags"].append((moment, a))
+    missed = 0
+    for p in people:
+        # Only this doctor's active plans, as in Medication Monitoring; doses are read only when one exists.
+        active = {x["id"] for x in plans(p["id"], doctor_id) if x["status"] == "active"}
+        doses = [d for d in scheduled_doses(p["id"], today, today, doctor_id)
+                 if d["plan_id"] in active and d["status"] == "missed"] if active else []
+        if doses:
+            missed += len(doses)
+            rows.setdefault(p["id"], {"flags": [], "doses": []})["doses"] = doses
+    names = {p["id"]: p["name"] or p["email"] for p in people}
+    items = [{"id": pid, "name": names[pid], **row,
+              "latest": max([m for m, _ in row["flags"][:1]] + [datetime.fromisoformat(f"{d['date']}T{d['time']}") for d in row["doses"]])}
+             for pid, row in rows.items() if pid in names]
+    items.sort(key=lambda item: item["latest"], reverse=True)
+    return {"people": people, "items": items, "week": week, "flagged": flagged, "missed": missed,
+            "flagged_ids": [i["id"] for i in items if i["flags"]], "missed_ids": [i["id"] for i in items if i["doses"]]}
+
+
+def _attention_row(item: dict, today) -> None:
+    lines = []
+    if item["flags"]:
+        moment, a = item["flags"][0]
+        label = DISEASES.get(a["disease"], {}).get("label", a["disease"].replace("_", " ").title())
+        more = f" · {len(item['flags']) - 1} more flagged" if len(item["flags"]) > 1 else ""
+        lines.append(f"{label} · {a['score'] * 100:.0f}% · {_when(moment, today)}{more}")
+    for name, count in Counter(d["name"] for d in item["doses"]).items():
+        lines.append(f"{name} · {_plural(count, 'dose')} missed today")
+    pills = ('<span class="attention-pill flag">Flagged</span>' if item["flags"] else "") + (
+        '<span class="attention-pill dose">Missed doses</span>' if item["doses"] else "")
+    tone = "flag" if item["flags"] else "dose"
+    with st.container(key=f"attention_row_{tone}_{item['id']}", horizontal=True, vertical_alignment="center"):
+        st.html(
+            f"""
+<div class="attention-main">
+    <span class="attention-avatar" aria-hidden="true">{escape(_initials(item['name']))}</span>
+    <div class="attention-text"><strong class="attention-name">{escape(item['name'])}</strong>
+    {''.join(f'<span class="attention-detail">{escape(line)}</span>' for line in lines)}</div>
+    <div class="attention-pills">{pills}</div>
+</div>
+"""
         )
-    )
-    figure.add_annotation(
-        text=f"<b>{elevated_pct:.0f}%</b><br><span style='font-size:11px'>Flagged</span>",
-        showarrow=False, font=dict(size=22, color=t["title"]),
-    )
-    style_figure(figure, height=300, legend=True)
-    figure.update_layout(title="Saved screening classifications")
-    return figure
+        # The patient's name in the label, so a list of these buttons is not just "Open, Open, Open" to a screen reader.
+        first = (_name_words(item["name"]) or [item["name"]])[0]
+        target = "Patient Records & History" if item["flags"] else "Medication Monitoring"
+        if st.button(f"Open {markdown_literal(first)}", key=f"home_open_{item['id']}", help=f"Opens {target} in Patient Intelligence"):
+            _focus(target, item["id"])
 
 
-def _screenings_by_condition_figure(history: list) -> go.Figure:
-    frame = pd.DataFrame(history)
-    counts = (
-        frame.groupby(["label", "prediction"]).size().reset_index(name="Count")
+def _calm_card(icon: str, title: str, text: str, kind: str = "") -> None:
+    st.html(
+        f"""
+<div class="attention-calm {kind}">
+    <div class="summary-icon"><img src="{icon_uri(f'dashboard/{icon}.svg')}" alt=""></div>
+    <div><strong>{escape(title)}</strong>
+    <p>{escape(text)}</p></div>
+</div>
+"""
     )
-    counts["Result"] = counts["prediction"].map({0: "Not flagged", 1: "Flagged"})
-    t = tokens()
-    figure = px.bar(
-        counts, x="label", y="Count", color="Result", barmode="group", title="Screenings by condition",
-        color_discrete_map={"Not flagged": t["success"], "Flagged": t["danger"]},
-    )
-    style_figure(figure, height=300, legend=True)
-    figure.update_layout(xaxis_title="", yaxis_title="", yaxis=dict(dtick=1))
-    return figure
 
 
-def _model_quality_figure() -> go.Figure:
-    rows = []
-    for disease, info in DISEASES.items():
-        m = final_metrics(disease)
-        rows.append({"Condition": info["label"], "Metric": "Disease recall", "Value": 100 * m.get("recall_disease", 0)})
-        rows.append({"Condition": info["label"], "Metric": "ROC-AUC", "Value": 100 * (m.get("roc_auc") or 0)})
-    frame = pd.DataFrame(rows)
-    t = tokens()
-    figure = px.bar(
-        frame, x="Condition", y="Value", color="Metric", barmode="group",
-        title="Recommended model — test-set quality (%)",
-        color_discrete_map={"Disease recall": t["accent"], "ROC-AUC": "#5B8FA3"},
-    )
-    style_figure(figure, height=300, legend=True)
-    figure.update_layout(xaxis_title="", yaxis_title="", yaxis_range=[0, 100])
-    return figure
+def _render_doctor_home() -> None:
+    doctor = st.session_state.user
+    care = _care_snapshot(doctor["id"])
+    people, items, today = care["people"], care["items"], local_today()
+    hour = local_now().hour
+    greeting = "Good morning" if 5 <= hour < 12 else "Good afternoon" if 12 <= hour < 18 else "Good evening"
+    if not people:
+        copy = "Patients appear here once they add your doctor email in their settings."
+    elif items:
+        copy = f"{_plural(len(items), 'patient')} {'needs' if len(items) == 1 else 'need'} a look today."
+    else:
+        copy = "Nothing needs your attention right now."
+    # ------------------------------------------------------------------ hero
+    with st.container(key="home_hero"):
+        st.html(
+            f"""
+<div class="home-hero">
+    <div>
+        <div class="home-eyebrow">AHEAD clinician dashboard</div>
+        <h1>{greeting}, {escape(_greeting_name(doctor.get('name', '')))}</h1>
+        <p>{escape(copy)}</p>
+    </div>
+    <div class="hero-badge"><small>Our mission</small>Small screenings.<br>Big futures.</div>
+</div>
+"""
+        )
+        primary_col, upload_col, _spacer = st.columns([0.26, 0.24, 0.5])
+        with primary_col:
+            if st.button("Patient intelligence", key="hero_intelligence", type="primary", width="stretch"):
+                st.session_state.pop("intelligence_focus", None)  # open on the default tab, not an unread earlier focus
+                go_to("intelligence")
+        with upload_col:
+            if st.button("Upload records", key="hero_upload", width="stretch"):
+                go_to("clinical")
 
+    # ------------------------------------------------------------------ summary cards
+    def across(ids, none):
+        # With no one linked, "No flagged results" would read as if patients had been checked.
+        return f"Across {_plural(len(ids), 'patient')}" if ids else none if people else "No patients linked yet"
 
-def _reference_records_figure() -> go.Figure:
-    frame = pd.DataFrame(
-        {"Condition": [info["label"] for info in DISEASES.values()],
-         "Records": [n_samples(d) for d in DISEASES]}
+    def only(ids):
+        return ids[0] if len(ids) == 1 else None
+
+    cards = [
+        ("patients", "Linked patients", len(people), "#8E7CC3",
+         "Sharing their records with you" if people else "No patients linked yet", "Open overview", "Overview", None),
+        ("flagged", "Flagged · 30 days", care["flagged"], "#C9706E", across(care["flagged_ids"], "No flagged results"),
+         "Review records", "Patient Records & History", only(care["flagged_ids"])),
+        ("doses", "Missed doses today", care["missed"], "#C98F1E", across(care["missed_ids"], "All caught up today"),
+         "Medication monitoring", "Medication Monitoring", only(care["missed_ids"])),
+        ("activity", "Assessments · 7 days", care["week"], "#2E9477",
+         "Saved by your patients" if people else "No patients linked yet", "View activity", "Overview", None),
+    ]
+    for col, (icon, label, value, color, note, action, tab, patient) in zip(st.columns(4), cards):
+        with col:
+            if summary_card(f"doctor_{icon}", label, value, note, action, color, icon):
+                _focus(tab, patient)
+
+    # ------------------------------------------------------------------ attention list
+    section_heading("Needs your attention", "Flagged results from the last 30 days and missed doses from linked patients.")
+    if not people:
+        _calm_card("patients", "No linked patients yet",
+                   "A patient links to you by adding your doctor email under Settings → Preferences → Care team access. "
+                   "Their flagged results and missed doses then appear here.", "neutral")
+    elif not items:
+        _calm_card("review", "Nothing needs your attention",
+                   f"No flagged results in the last 30 days and no missed doses today across {_plural(len(people), 'linked patient')}.")
+    else:
+        for item in items[:ATTENTION_ROWS]:
+            _attention_row(item, today)
+        # Patient Intelligence has no list of these patients (nor of missed doses), so the rest stay here.
+        if len(items) > ATTENTION_ROWS:
+            with st.expander(_plural(len(items) - ATTENTION_ROWS, "more patient")):
+                for item in items[ATTENTION_ROWS:]:
+                    _attention_row(item, today)
+
+    # ------------------------------------------------------------------ screening
+    section_heading("Screen a patient", "Run a guided screening during a consultation. Results are saved to your account, not to a patient's record.")
+    condition_cards("doctor_home")
+    history = st.session_state.get("screening_history", [])
+    if history:
+        with st.expander("Screenings you ran"):
+            table = pd.DataFrame(
+                [
+                    {
+                        "Date": to_local(item["time"].isoformat()),
+                        "Condition": item["label"],
+                        "Model": model_label(item["model"]),
+                        "Score": round(item["probability"] * 100, 1),
+                        "Result": "Flagged" if item["prediction"] else "Not flagged",
+                    }
+                    for item in history[:10]
+                ]
+            )
+            # Real datetimes and numbers (not text) so sorting by a header is chronological / numeric.
+            st.dataframe(table, width="stretch", hide_index=True,
+                         column_config={"Date": st.column_config.DatetimeColumn(format="DD MMM YYYY, HH:mm"),
+                                        "Score": st.column_config.NumberColumn(format="%.1f%%")})
+            st.caption("Your most recent screenings, newest first (up to ten). Flagged means the model score reached that screening's threshold; it is not a diagnosis.")
+
+    disclaimer(
+        "AHEAD provides educational screening estimates only. It does not provide medical diagnoses "
+        "and does not replace professional medical evaluation.",
+        label="Clinical notice",
     )
-    figure = px.bar(frame, x="Condition", y="Records", title="Reference records by condition", text_auto=".3s")
-    figure.update_traces(marker_color=[info["colour"] for info in DISEASES.values()])
-    style_figure(figure, height=300)
-    figure.update_layout(xaxis_title="", yaxis_title="")
-    return figure
 
 
 def render_overview() -> None:
     user = current_user()
-    history = st.session_state.get("screening_history", [])
+    if user["is_doctor"]:
+        _render_doctor_home()
+        return
 
-    dashboard_copy = ("Review linked patient records, medication routines and assessment activity." if user["is_doctor"] else "Build healthier habits, keep track of your care, and make time for prevention.")
+    dashboard_copy = "Build healthier habits, keep track of your care, and make time for prevention."
     # ------------------------------------------------------------------ hero
     with st.container(key="home_hero"):
         st.html(
@@ -119,85 +276,5 @@ def render_overview() -> None:
             if st.button("Ask AHEAD Assistant", key="hero_ask", width="stretch"):
                 open_assistant("overview")
 
-    if not user["is_doctor"]:
-        from ahead.pages.patient_dashboard import render_patient_dashboard
-        render_patient_dashboard()
-        return
-
-    if st.button("Open Advanced Analytics & Patient Intelligence", type="primary"):
-        go_to("intelligence")
-
-    # ------------------------------------------------------------------ KPIs
-    total_records = sum(n_samples(d) for d in DISEASES)
-    families = max((len(validation_results(d)) for d in DISEASES), default=0)
-    elevated = sum(1 for item in history if item["prediction"] == 1)
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi_card("Saved screenings", str(len(history)),
-                 "Available in your screening history" if history else "Run your first screening", "✚")
-    with c2:
-        kpi_card("Elevated results", str(elevated),
-                 "Flagged for professional review" if elevated else "No elevated patterns yet", "!",
-                 "danger" if elevated else "success")
-    with c3:
-        kpi_card("Reference records", f"{total_records:,}", "Across the three project datasets", "▤")
-    with c4:
-        kpi_card("Model families", str(families), "Benchmarked per condition", "⚙", "warning")
-
-    # ------------------------------------------------------------------ conditions
-    section_heading("Your screening options", "Three focused early-awareness tools using disease-specific machine-learning models.")
-    condition_cards("overview")
-
-    # ------------------------------------------------------------------ session visuals
-    section_heading("Your screening history", "Saved results loaded for your account and screenings completed during this visit.")
-    left, right = st.columns(2)
-    if history:
-        with left:
-            show_chart(_risk_distribution_figure(history))
-        with right:
-            show_chart(_screenings_by_condition_figure(history))
-        st.caption("Flagged means the model score reached that screening's threshold. These counts do not establish disease prevalence.")
-        with st.expander("Recent screenings"):
-            table = pd.DataFrame(
-                [
-                    {
-                        "Date": to_local(item["time"].isoformat()),
-                        "Condition": item["label"],
-                        "Model": item["model"],
-                        "Score": round(item["probability"] * 100, 1),
-                        "Result": "Elevated" if item["prediction"] else "Lower risk",
-                    }
-                    for item in history[:10]
-                ]
-            )
-            # Real datetimes and numbers (not text) so sorting by a header is chronological / numeric.
-            st.dataframe(table, width="stretch", hide_index=True,
-                         column_config={"Date": st.column_config.DatetimeColumn(format="DD MMM YYYY, HH:mm"),
-                                        "Score": st.column_config.NumberColumn(format="%.1f%%")})
-    else:
-        with left:
-            empty_state("◔", "No screenings yet",
-                        "Complete a screening and your risk distribution will appear here.")
-        with right:
-            empty_state("▥", "Nothing to compare",
-                        "Results by condition are charted once you have at least one screening.")
-
-    # ------------------------------------------------------------------ project visuals
-    section_heading("Project data at a glance", "Reference dataset sizes and how well each recommended model performs on unseen test data.")
-    left, right = st.columns(2)
-    with left:
-        show_chart(_reference_records_figure())
-    with right:
-        show_chart(_model_quality_figure())
-    st.caption(
-        "Recall on the disease class and ROC-AUC are shown instead of plain accuracy because two of the "
-        "datasets are heavily imbalanced, where accuracy alone is misleading. Recommended models: "
-        + ", ".join(f"{info['label']} → {best_model(d)}" for d, info in DISEASES.items())
-        + "."
-    )
-
-    disclaimer(
-        "AHEAD provides educational screening estimates only. It does not provide medical diagnoses "
-        "and does not replace professional medical evaluation.",
-        label="Clinical notice",
-    )
+    from ahead.pages.patient_dashboard import render_patient_dashboard
+    render_patient_dashboard()

@@ -1,8 +1,9 @@
 """
 ahead/screening.py
 ==================
-The patient-facing screening flow: input form, prediction, gauge, guidance,
-AHEAD Insight (Gemini) and model interpretation.
+The screening flow: input form, prediction, gauge, guidance, AHEAD Insight
+(Gemini) and model interpretation. Patients read it about themselves; doctor
+accounts get the same flow worded about the entered values and the patient.
 """
 
 import math
@@ -15,9 +16,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from ahead.clinical_data import input_bounds
+from ahead.clinical_data import OPTIONAL_BLANK, input_bounds, shown_value
 from ahead.components import (
-    disclaimer, model_selector, page_header, record_screening, result_card, section_heading,
+    current_user, disclaimer, model_label, model_selector, page_header, record_screening, result_card, section_heading,
 )
 from ahead.config import (
     DISEASE_GROUP_DESCRIPTIONS, DISEASES, FEATURE_GROUPS, GENDER_CODED_FIELDS, GROUP_DESCRIPTIONS, OPTIONAL_INPUTS,
@@ -151,6 +152,13 @@ def risk_gauge(probability: float, threshold: float, title: str) -> go.Figure:
     return figure
 
 
+def _column_label(name: str, inputs: list) -> str:
+    """A preprocessed column as people read it: the input's label, plus the category of a one-hot column
+    ('AgeCategory_Age 80 or older' -> 'Age Category: Age 80 or older'). *inputs* are longest first."""
+    base = next((f for f in inputs if name == f or name.startswith(f + "_")), name)
+    return pretty_label(base) + (f": {name[len(base) + 1:]}" if name != base else "")
+
+
 def model_feature_importance(model, title: str, top_n: int = 12):
     """Bar chart of global importances; returns (figure, axis_label) or (None, reason)."""
     classifier = model.named_steps["classifier"]
@@ -159,6 +167,8 @@ def model_feature_importance(model, title: str, top_n: int = 12):
         names = [name.split("__", 1)[-1] for name in preprocessor.get_feature_names_out()]
     except Exception:
         return None, "Feature names are not available for this pipeline."
+    inputs = sorted(map(str, getattr(preprocessor, "feature_names_in_", [])), key=len, reverse=True)
+    names = [_column_label(name, inputs) for name in names]
 
     if hasattr(classifier, "feature_importances_"):
         importance = np.asarray(classifier.feature_importances_)
@@ -339,6 +349,79 @@ NEXT_STEPS = {
     },
 }
 
+# What a doctor reads instead: points to weigh, never specific orders.
+DOCTOR_NEXT_STEPS = {
+    "diabetes": {
+        1: [
+            ("Review the result in clinical context",
+             "Interpret this screening estimate alongside the patient's symptoms, history and previous results. "
+             "It is not a diagnosis."),
+            ("Consider confirmatory assessment",
+             "Confirmatory glycaemic assessment, such as HbA1c or fasting plasma glucose, may be considered "
+             "as clinically indicated."),
+            ("Review related cardiometabolic risk",
+             "Diabetes risk often overlaps with blood-pressure, lipid and cardiovascular risk; consider whether "
+             "these have been assessed recently."),
+            ("Discuss lifestyle support where appropriate",
+             "If increased risk is confirmed, sustainable nutrition, activity and weight support can be "
+             "discussed with the patient."),
+        ],
+        0: [
+            ("Continue routine screening",
+             "A lower screening result does not rule out diabetes. Routine screening can continue according to "
+             "the patient's age, history and other risk factors."),
+            ("Review individual values",
+             "An entered value may still merit attention when the overall result is lower; see Key factors."),
+        ],
+    },
+    "heart": {
+        1: [
+            ("Review cardiovascular risk in context",
+             "Interpret this estimate alongside the patient's history, particularly any previous stroke, diabetes, "
+             "kidney disease or significant smoking history."),
+            ("Consider further cardiovascular assessment",
+             "Review of blood pressure, lipids, glycaemic status and overall cardiovascular risk, or specialist "
+             "assessment, may be considered as clinically indicated."),
+            ("Review smoking status",
+             "If the patient currently smokes, evidence-based cessation support can be discussed."),
+            ("Check for exertional symptoms",
+             "Before encouraging more activity, consider whether chest discomfort, unusual breathlessness or "
+             "dizziness on exertion has been reported."),
+        ],
+        0: [
+            ("Continue routine cardiovascular monitoring",
+             "A lower screening result does not eliminate future risk. Routine checks of blood pressure, lipids "
+             "and glycaemic status can continue as recommended."),
+            ("Review modifiable risk factors",
+             "Smoking, physical activity, sleep and diet remain relevant to long-term cardiovascular risk."),
+        ],
+    },
+    "kidney": {
+        1: [
+            ("Review kidney health in context",
+             "Interpret this estimate alongside the patient's laboratory history and comorbidities; nephrology "
+             "referral may be considered where clinically indicated."),
+            ("Consider repeat kidney assessment",
+             "Repeat serum creatinine/eGFR and urine albumin-to-creatinine ratio (uACR) may be considered to "
+             "confirm or exclude a persistent abnormality."),
+            ("Review blood pressure and glycaemic control",
+             "Hypertension and diabetes commonly affect kidney health; consider whether current monitoring "
+             "is adequate."),
+            ("Review medicines",
+             "Prescribed and over-the-counter medicines, including regular painkillers and supplements, may be "
+             "relevant to kidney health."),
+        ],
+        0: [
+            ("Continue routine kidney monitoring",
+             "Where diabetes, hypertension or a family history of kidney disease is present, routine kidney-function "
+             "and urine testing can continue as recommended."),
+            ("Review long-term kidney risk",
+             "Blood-pressure and glycaemic control, smoking and regular painkiller use remain relevant to "
+             "long-term kidney health."),
+        ],
+    },
+}
+
 URGENT_MESSAGES = {
     "heart": (
         "<strong>Seek emergency medical care immediately</strong> for new or severe chest pressure or pain, "
@@ -357,22 +440,92 @@ URGENT_MESSAGES = {
     ),
 }
 
+DOCTOR_URGENT_MESSAGES = {
+    "heart": (
+        "<strong>Red flags:</strong> new or severe chest pressure or pain, shortness of breath, syncope, or pain "
+        "spreading to the arm, back, neck or jaw need emergency assessment. The AHEAD result should not guide "
+        "urgent decisions."
+    ),
+    "kidney": (
+        "<strong>Red flags:</strong> severe shortness of breath, confusion, little or no urine output, rapidly "
+        "worsening swelling or another severe new symptom need urgent assessment. This screening tool is not "
+        "designed for emergencies."
+    ),
+    "diabetes": (
+        "<strong>Red flags:</strong> severe illness, confusion, syncope, persistent vomiting or severe dehydration "
+        "need urgent assessment. The screening result should not be used to decide whether emergency care is needed."
+    ),
+}
 
-def get_next_steps(disease: str, prediction: int) -> list:
-    return NEXT_STEPS[disease][prediction]
+
+def get_next_steps(disease: str, prediction: int, doctor: bool = False) -> list:
+    return (DOCTOR_NEXT_STEPS if doctor else NEXT_STEPS)[disease][prediction]
+
+
+def _urgent(disease: str, doctor: bool) -> None:
+    st.html(f'<div class="notice urgent">{(DOCTOR_URGENT_MESSAGES if doctor else URGENT_MESSAGES)[disease]}</div>')
+
+
+def _action_cards(steps: list) -> None:
+    for index, (title, text) in enumerate(steps, start=1):
+        st.html(
+            f"""
+<div class="action-card">
+    <span class="action-number">{index}</span>
+    <span class="action-title">{escape(title)}</span>
+    <div class="action-text">{escape(text)}</div>
+</div>
+"""
+        )
 
 
 # =============================================================================
 # AHEAD INSIGHT (Gemini)
 # =============================================================================
 
-def generate_ai_guidance(disease, prediction, probability, risk_factors, user_values, threshold, usual_threshold) -> str:
+def generate_ai_guidance(disease, prediction, probability, risk_factors, user_values, threshold, usual_threshold,
+                         doctor: bool = False) -> str:
     result_label = "Elevated screening risk" if prediction == 1 else "Lower screening risk"
     cut_off = f"{threshold * 100:g}%" + (
         f" (usual {usual_threshold * 100:g}%, lowered because some lab values were not provided; "
         "a score above this cut-off is flagged even if the number looks low)" if threshold < usual_threshold else "")
     friendly_values = {pretty_label(k): v for k, v in user_values.items() if not _blank(v)}
     not_provided = [pretty_label(k) for k, v in user_values.items() if _blank(v)]
+    if doctor:
+        return generate_text(f"""
+You are AHEAD Insight, the interpretation layer inside AHEAD, a university educational early-awareness
+screening prototype. It is not a diagnostic medical device and must never present a screening result as a
+confirmed diagnosis.
+
+A clinician entered a patient's values and the disease-specific machine-learning model has already produced
+the screening result. Your role is NOT to make a new prediction and NOT to repeat AHEAD's standard points to
+review. Help the clinician read the existing result in the context of the entered values.
+
+Condition screened: {DISEASES[disease]['long_label']}
+Screening result: {result_label}
+Model screening score: {probability * 100:.1f}%
+Classification threshold: {cut_off}
+Relevant factors identified by AHEAD: {risk_factors if risk_factors else 'No major rule-based factors highlighted'}
+Entered values: {friendly_values}
+Not entered (the model used typical training-data values instead): {', '.join(not_provided) or 'none'}
+
+Write a concise, professional interpretation for a clinician.
+
+Use exactly these headings:
+### Summary of the Result
+### Notable Entered Values
+### Points to Consider
+
+Requirements:
+- Refer to "the patient" in the third person; never address the reader as the patient.
+- Make clear that the result is an educational screening estimate, not a diagnosis, and that the score is not a calibrated probability.
+- In "Notable Entered Values", identify 2 to 4 entered values or history items that are relevant, without claiming that any single input caused the prediction.
+- If an individual measurement may deserve attention even when the overall result is lower, say so.
+- In "Points to Consider", give 2 to 4 brief considerations. Do not prescribe specific tests, referrals or treatment; say "as clinically indicated" where relevant.
+- Do not recommend starting, stopping or changing medication.
+- Do not invent symptoms, diagnoses, laboratory results or risk factors that were not entered, and do not guess values that were not entered.
+- Keep the answer brief enough to read inside a screening application.
+""")
     prompt = f"""
 You are AHEAD Insight, the personalized interpretation layer inside AHEAD.
 
@@ -427,6 +580,11 @@ LAB_ADVICE = {
                 "repeat this screening with your results when you have them.",
     "kidney": "Add these values from a recent reading or test report when you have them for a more precise estimate.",
 }
+DOCTOR_LAB_ADVICE = {
+    "diabetes": "An HbA1c or fasting plasma glucose result gives a much more reliable picture; repeat the screening "
+                "with it when it is available.",
+    "kidney": "Adding these values from a recent reading or laboratory report gives a more precise estimate.",
+}
 
 # Shown when a value in REQUIRED_FOR_SCORE is blank.
 NO_SCORE_REASON = {
@@ -445,6 +603,42 @@ NO_SCORE_STEPS = {
          "High blood pressure is a common cause of kidney problems. A home or pharmacy reading is a simple start."),
     ],
 }
+DOCTOR_NO_SCORE_STEPS = {
+    "kidney": [
+        ("Consider kidney-function assessment",
+         "Serum creatinine with eGFR and a urine albumin-to-creatinine ratio (ACR) are the usual assessment, "
+         "particularly with diabetes, hypertension or a family history of kidney disease."),
+        ("Repeat the screening with the results",
+         "Enter serum creatinine, eGFR and urine ACR from the laboratory report to obtain a kidney estimate."),
+        ("Review blood pressure",
+         "Hypertension is a common contributor to kidney disease; a recent reading helps put the result in context."),
+    ],
+}
+
+# Form notes that do not assume the reader is the person being screened (config's notes say "you").
+DOCTOR_GROUP_DESCRIPTIONS = {
+    "Blood Pressure": "Optional. Enter the most recent reading if one is available.",
+    "Clinical Measurements": "Optional. Recent laboratory values; leave blank any that are not available.",
+}
+DOCTOR_DISEASE_GROUP_DESCRIPTIONS = {
+    "kidney": {
+        "Clinical Measurements": "From a recent blood or urine test. Serum creatinine, eGFR and urine ACR are needed "
+                                 "for a kidney estimate; leave blank any others that are not available.",
+    },
+}
+DOCTOR_SUBTITLES = {
+    "diabetes": "Enter the lifestyle and medical-history values, and lab values where available, to generate an "
+                "early-awareness diabetes screening estimate.",
+    "kidney": "Enter the lifestyle and family-history values and the kidney test results to generate a chronic "
+              "kidney disease screening estimate.",
+}
+
+
+def _group_note(disease: str, section: str, doctor: bool) -> str:
+    doctor_note = (DOCTOR_DISEASE_GROUP_DESCRIPTIONS.get(disease, {}).get(section)
+                   or DOCTOR_GROUP_DESCRIPTIONS.get(section)) if doctor else None
+    return (doctor_note or DISEASE_GROUP_DESCRIPTIONS.get(disease, {}).get(section)
+            or GROUP_DESCRIPTIONS.get(section, "Other values used by the model."))
 
 
 def _short(feature: str) -> str:
@@ -474,10 +668,17 @@ def low_specificity_caveat(disease: str, profile: dict) -> str:
     return text
 
 
-def missing_note(disease: str, result: dict) -> str:
+def _left_blank(names: list, doctor: bool) -> str:
+    """'You left X blank' for patients; 'X was left blank' for doctors."""
+    if not doctor:
+        return f"You left {_listed(names)} blank"
+    return f"{_listed(names)} {'was' if len(names) == 1 else 'were'} left blank"
+
+
+def missing_note(disease: str, result: dict, doctor: bool = False) -> str:
     """The caveat shown above a score that was produced with optional measurements left blank."""
     label = DISEASES[disease]["long_label"]
-    paragraphs = [f"You left {_listed([_short(f) for f in result['missing']])} blank, so the model used typical "
+    paragraphs = [f"{_left_blank([_short(f) for f in result['missing']], doctor)}, so the model used typical "
                   "values from its training data in their place."]
     usual = decision_threshold(disease, result["model"])
     if result["threshold"] < usual:
@@ -493,36 +694,33 @@ def missing_note(disease: str, result: dict) -> str:
         measured += "."
         measured += low_specificity_caveat(disease, profile)
         paragraphs.append(measured)
-    paragraphs.append("A lower score does not rule the condition out. " + LAB_ADVICE.get(disease, ""))
+    paragraphs.append("A lower score does not rule the condition out. "
+                      + (DOCTOR_LAB_ADVICE if doctor else LAB_ADVICE).get(disease, ""))
     return "\n\n".join(paragraphs)
 
 
-def lab_results_needed(disease: str, result: dict) -> None:
+def lab_results_needed(disease: str, result: dict, doctor: bool = False) -> None:
     """Shown instead of a score when a measurement the model cannot work without was left blank."""
     needed = [_short(f) for f in REQUIRED_FOR_SCORE[disease] if f in result["missing"]]
     section_heading("Lab results needed", f"AHEAD can't give a {DISEASES[disease]['label'].lower()} estimate without them.")
+    source = "the entered values" if doctor else "your answers"
     st.warning(
-        f"You left {_listed(needed)} blank. {NO_SCORE_REASON[disease]} No score is shown and nothing was saved; "
-        "the factors below come only from your answers."
+        f"{_left_blank(needed, doctor)}. {NO_SCORE_REASON[disease]} No score is shown and nothing was saved; "
+        f"the factors below come only from {source}."
     )
     factors = identify_risk_factors(disease, result["values"])
     if factors:
         st.html("".join(f'<span class="factor-chip">{escape(f)}</span>' for f in factors))
     else:
-        st.info("No rule-based risk factors were highlighted from your answers.")
-    section_heading("What you can do next", "")
-    for index, (title, text) in enumerate(NO_SCORE_STEPS[disease], start=1):
-        st.html(
-            f"""
-<div class="action-card">
-    <span class="action-number">{index}</span>
-    <span class="action-title">{escape(title)}</span>
-    <div class="action-text">{escape(text)}</div>
-</div>
-"""
-        )
-    st.link_button("Find a nearby clinic (map search)", "https://www.google.com/maps/search/hospital+near+me/")
-    st.html(f'<div class="notice urgent">{URGENT_MESSAGES[disease]}</div>')
+        st.info(f"No rule-based risk factors were highlighted from {source}.")
+    if doctor:
+        section_heading("Points to review", f"Considerations before a {DISEASES[disease]['label'].lower()} estimate can be given.")
+        _action_cards(DOCTOR_NO_SCORE_STEPS[disease])
+    else:
+        section_heading("What you can do next", "")
+        _action_cards(NO_SCORE_STEPS[disease])
+        st.link_button("Find a nearby clinic (map search)", "https://www.google.com/maps/search/hospital+near+me/")
+    _urgent(disease, doctor)
 
 
 # =============================================================================
@@ -533,10 +731,15 @@ def render_predictor(disease: str) -> bool:
     """Render the guided screening for *disease*. Returns True when a result is on screen."""
     info = DISEASES[disease]
     disease_label = info["long_label"]
+    doctor = current_user()["is_doctor"]   # a doctor enters someone else's values: third-person wording
 
-    page_header("AHEAD Clinical Screening", info["page_title"], info["page_subtitle"])
+    page_header("AHEAD Clinical Screening", info["page_title"],
+                DOCTOR_SUBTITLES.get(disease, info["page_subtitle"]) if doctor else info["page_subtitle"])
 
-    st.markdown("#### Prediction model")
+    if doctor:
+        section_heading("Prediction model", "Choose the model that scores the entered values.")
+    else:
+        st.markdown("#### Prediction model")
     pipeline, selected_name, threshold = model_selector(disease, key=f"{disease}_model_selector",
                                                         blank_labs=bool(OPTIONAL_INPUTS.get(disease)))
     if pipeline is None:
@@ -562,8 +765,7 @@ def render_predictor(disease: str) -> bool:
                 f"""
 <div class="form-section-title">
     <div class="form-section-number">{number}</div>
-    <div><h3>{escape(section)}</h3><p>{escape(DISEASE_GROUP_DESCRIPTIONS.get(disease, {}).get(section)
-        or GROUP_DESCRIPTIONS.get(section, "Other values used by the model."))}</p></div>
+    <div><h3>{escape(section)}</h3><p>{escape(_group_note(disease, section, doctor))}</p></div>
 </div>
 """
             )
@@ -598,14 +800,15 @@ def render_predictor(disease: str) -> bool:
         st.session_state.last_results[disease] = result
     elif disease in st.session_state.last_results:
         result = st.session_state.last_results[disease]
-        st.info("Showing your most recent result for this screening. Submit the form again to update it.")
+        st.info(f"Showing {'the' if doctor else 'your'} most recent result for this screening. "
+                "Submit the form again to update it.")
 
     if result is None:
         disclaimer()
         return False
 
     if result.get("no_score"):
-        lab_results_needed(disease, result)
+        lab_results_needed(disease, result, doctor)
         disclaimer()
         return True
 
@@ -617,15 +820,19 @@ def render_predictor(disease: str) -> bool:
     # from the one currently chosen in the selector when a stored result is being shown.
     result_pipeline = pipeline if model_name == selected_name else (load_pipeline(disease, model_name) or pipeline)
     if model_name != selected_name:
-        st.caption(f"This result was produced by {model_name}. Submit the form to screen with {selected_name}.")
+        named = model_label if doctor else str
+        st.caption(f"This result was produced by {named(model_name)}. Submit the form to screen with {named(selected_name)}.")
 
     # ------------------------------------------------------------------ result
-    section_heading("Screening Result", "Risk estimate generated from the information entered above.")
+    section_heading("Screening result" if doctor else "Screening Result",
+                    "Risk estimate generated from the information entered above.")
     if result.get("missing"):
-        st.warning(missing_note(disease, result))
+        st.warning(missing_note(disease, result, doctor))
     left, right = st.columns(2)
     with left:
-        result_card(prediction, probability, disease_label, model_name, threshold)
+        # Screenings here are not attached to a record, so the card speaks about the entered values.
+        result_card(prediction, probability, disease_label, model_name, threshold,
+                    audience="doctor" if doctor else "patient", subject="The entered values")
     with right:
         from ahead.visuals import score_ring
         score_ring(probability * 100, "Model screening score",
@@ -643,7 +850,7 @@ def render_predictor(disease: str) -> bool:
         source = "test" if model_name == best_model(disease) else "validation"
         scope = " with every value entered" if result.get("missing") else ""
     st.info(
-        f"{model_name} {source}-set precision{scope}: {report_metrics.get('precision_disease', 0):.1%}; "
+        f"{model_label(model_name) if doctor else model_name} {source}-set precision{scope}: {report_metrics.get('precision_disease', 0):.1%}; "
         f"recall: {report_metrics.get('recall_disease', 0):.1%}. "
         "Precision describes how often flagged examples were positive in that dataset; "
         "recall describes how many positive examples the model flagged. "
@@ -653,30 +860,30 @@ def render_predictor(disease: str) -> bool:
         disease, "Session screening", values, probability, threshold, model_name, report_metrics,
         metric_source=source, metric_scope=scope, usual_threshold=decision_threshold(disease, model_name),
         metric_caveat=(f"Specificity with the same inputs left blank: {profile['test']['specificity'] * 100:.1f}%."
-                       + low_specificity_caveat(disease, profile)) if profile else ""),
+                       + low_specificity_caveat(disease, profile)) if profile else "",
+        # A session screening has no saved record, so there is no review status to print.
+        status=None, audience="doctor" if doctor else "patient", name="" if doctor else current_user()["name"],
+        factors=identify_risk_factors(disease, values)),
         file_name=f"ahead_{disease}_screening.pdf", mime="application/pdf")
 
-    recommendations_tab, factors_tab, insight_tab, model_tab, history_tab = st.tabs(["Recommendations", "Key factors", "AHEAD Insight", "Model information", "History"])
+    # No History tab for doctors: their saved screenings are of different people, so one trend line would mix them.
+    labels = ["Points to review" if doctor else "Recommendations", "Key factors", "AHEAD Insight", "Model information"]
+    recommendations_tab, factors_tab, insight_tab, model_tab, *history_tab = st.tabs(labels + ([] if doctor else ["History"]))
     with recommendations_tab:
         # ------------------------------------------------------------------ next steps
-        section_heading("Recommended Next Steps", "Practical actions to consider after this screening result.")
-        steps = get_next_steps(disease, prediction)
-        for index, (title, text) in enumerate(steps, start=1):
-            st.html(
-                f"""
-    <div class="action-card">
-        <span class="action-number">{index}</span>
-        <span class="action-title">{escape(title)}</span>
-        <div class="action-text">{escape(text)}</div>
-    </div>
-    """
-            )
-        st.link_button("Find a nearby clinic (map search)", "https://www.google.com/maps/search/hospital+near+me/")
+        if doctor:
+            section_heading("Points to review", "Considerations for this result. Further assessment as clinically indicated.")
+        else:
+            section_heading("Recommended Next Steps", "Practical actions to consider after this screening result.")
+        _action_cards(get_next_steps(disease, prediction, doctor))
+        if not doctor:
+            st.link_button("Find a nearby clinic (map search)", "https://www.google.com/maps/search/hospital+near+me/")
 
     with factors_tab:
         # ------------------------------------------------------------------ risk factors
         risk_factors = identify_risk_factors(disease, values)
-        section_heading("Factors Identified From Your Inputs", "Entered factors that may be relevant to the screening result.")
+        section_heading("Factors identified from the entered values" if doctor else "Factors Identified From Your Inputs",
+                        "Entered factors that may be relevant to the screening result.")
         if risk_factors:
             st.html("".join(f'<span class="factor-chip">{escape(f)}</span>' for f in risk_factors))
         else:
@@ -685,45 +892,54 @@ def render_predictor(disease: str) -> bool:
                 "The machine-learning model may still use combinations of features in its prediction."
             )
 
-        st.html(f'<div class="notice urgent">{URGENT_MESSAGES[disease]}</div>')
+        _urgent(disease, doctor)
 
     with insight_tab:
         # ------------------------------------------------------------------ AHEAD insight
-        section_heading("AHEAD Insight", "Personalized explanation of your screening.")
+        section_heading("AHEAD Insight", "Explanation of this result for clinical review." if doctor
+                        else "Personalized explanation of your screening.")
         insight_key = f"{model_name}|{probability:.4f}|{sorted(values.items())}"
         insights = st.session_state.setdefault("insights", {})
         stored = insights.get(disease)
         if not gemini_available():
             st.info(
                 "AHEAD Insight is not configured on this deployment (no Gemini API key). "
-                "Your screening result and the standard AHEAD recommendations above are complete without it."
+                + ("The screening result and the points to review are complete without it." if doctor else
+                   "Your screening result and the standard AHEAD recommendations above are complete without it.")
             )
         elif stored and stored["key"] == insight_key:
             st.markdown(stored["text"])
-            st.caption("Generated by Google Gemini from the values you entered. Educational text, not medical advice.")
+            st.caption("Generated by Google Gemini from the entered values. Educational text, not clinical guidance."
+                       if doctor else
+                       "Generated by Google Gemini from the values you entered. Educational text, not medical advice.")
         else:
             st.caption(
+                "AHEAD Insight sends the entered values (no name or contact details) to Google Gemini to write a "
+                "short interpretation of this result for clinical review." if doctor else
                 "AHEAD Insight sends the values you entered above (no name or contact details) to Google Gemini "
                 "to write a plain-language explanation of this result."
             )
             if st.button("Generate AHEAD Insight", key=f"{disease}_insight", type="primary"):
-                with st.spinner("Preparing your personalized insight…"):
+                with st.spinner("Preparing the insight…" if doctor else "Preparing your personalized insight…"):
                     try:
                         text = generate_ai_guidance(disease, prediction, probability, risk_factors, values,
-                                                    threshold, decision_threshold(disease, model_name))
+                                                    threshold, decision_threshold(disease, model_name), doctor)
                     except Exception:
                         text = ""
                 if text:
                     insights[disease] = {"key": insight_key, "text": text}
                     st.rerun()
                 st.warning(
-                    "AHEAD Insight is temporarily unavailable. Your screening result and the standard "
-                    "AHEAD recommendations above are still available — you can try again."
+                    "AHEAD Insight is temporarily unavailable. "
+                    + ("The screening result and the points to review are still available — you can try again."
+                       if doctor else "Your screening result and the standard "
+                       "AHEAD recommendations above are still available — you can try again.")
                 )
 
     with model_tab:
         # ------------------------------------------------------------------ interpretation
-        section_heading("Model Interpretation", "Features with the strongest overall influence on this model.")
+        section_heading("Model interpretation" if doctor else "Model Interpretation",
+                        "Features with the strongest overall influence on this model.")
         figure, note = model_feature_importance(result_pipeline, f"{info['label']} — Leading Model Features")
         if figure is not None:
             show_chart(figure)
@@ -735,41 +951,66 @@ def render_predictor(disease: str) -> bool:
         else:
             st.info(note)
 
-        st.subheader("Your result: model input sensitivity")
-        st.caption("For each row below, one entered value was replaced with a typical training-data value. "
-                   "The score difference is illustrative, not a cause, diagnosis, or medical recommendation.")
+        caveat = ("For each row below, one entered value was replaced with a typical training-data value. "
+                  "The score difference is illustrative, not a cause, diagnosis, or medical recommendation.")
+        if doctor:
+            section_heading("Model input sensitivity for these values", caveat)
+        else:
+            st.subheader("Your result: model input sensitivity")
+            st.caption(caveat)
         try:
             local = individual_sensitivity(result_pipeline, values, stats)
+            if doctor:  # read like the Clinical Dashboard: no rows whose entry equals the typical value once rounded
+                local = [(f, shown_value(f, v, stats[f]), shown_value(f, r, stats[f]), d) for f, v, r, d in local]
+                local = [row for row in local if row[1] != row[2]]
             if local:
-                sensitivity_frame = pd.DataFrame([{'Input':pretty_label(f),'Score difference (points)':delta*100} for f,_,_,delta in local])
-                sensitivity_figure = px.bar(sensitivity_frame,x='Score difference (points)',y='Input',orientation='h',title='Illustrative input sensitivity')
-                sensitivity_figure.update_traces(marker_color=['#14556B' if v>=0 else '#5B8FA3' for v in sensitivity_frame['Score difference (points)']])
+                axis = 'Score change (points)' if doctor else 'Score difference (points)'  # doctors: as in the table below
+                sensitivity_frame = pd.DataFrame([{'Input':pretty_label(f),axis:delta*100} for f,_,_,delta in local])
+                sensitivity_figure = px.bar(sensitivity_frame,x=axis,y='Input',orientation='h',title='Illustrative input sensitivity')
+                # Rose and blue-grey keep at least 3:1 contrast on both the light and the dark card.
+                sensitivity_figure.update_traces(marker_color=['#C9706E' if v>=0 else '#5B8FA3' for v in sensitivity_frame[axis]])
                 show_chart(style_figure(sensitivity_figure,300))
-                st.dataframe(pd.DataFrame([{"Input": pretty_label(f), "Your value": str(v),
-                                            "Comparison value": str(reference),
+                st.dataframe(pd.DataFrame([{"Input": pretty_label(f), "Entered": v, "Typical value": reference,
+                                            "Score change (points)": round(delta * 100, 1) + 0.0} if doctor else
+                                           {"Input": pretty_label(f), "Your value": str(v), "Comparison value": str(reference),
                                             "Score change (percentage points)": round(delta * 100, 1)}
                                            for f, v, reference, delta in local]), hide_index=True, width="stretch")
+            elif doctor:
+                st.info("The entered values match the typical training values, so there is no input comparison to show.")
             else:
                 st.info("No input comparisons were available.")
         except (ValueError, TypeError):
             st.info("Individual model comparison is unavailable for this result.")
 
         with st.expander("View entered information"):
-            summary = input_frame.T.rename(columns={0: "Entered Value"})
-            summary.index = [pretty_label(f) for f in summary.index]
-            summary["Entered Value"] = summary["Entered Value"].astype(str)  # mixed types → Arrow-safe
-            st.dataframe(summary, width="stretch")
+            if doctor:  # Male/Female, No/Yes and rounded numbers, as in the Clinical Dashboard value table
+                optional = OPTIONAL_INPUTS.get(disease, [])
+                st.dataframe(pd.DataFrame({"Input": [pretty_label(f) for f in feature_list],
+                                           "Value": [shown_value(f, values.get(f), stats[f],
+                                                                 OPTIONAL_BLANK if f in optional else "Not provided")
+                                                     for f in feature_list]}),
+                             hide_index=True, width="stretch")
+            else:
+                summary = input_frame.T.rename(columns={0: "Entered Value"})
+                summary.index = [pretty_label(f) for f in summary.index]
+                summary["Entered Value"] = summary["Entered Value"].astype(str)  # mixed types → Arrow-safe
+                st.dataframe(summary, width="stretch")
 
-    with history_tab:
-        from ahead.storage import load_screenings
-        from ahead.visuals import trend
-        prior = [r for r in load_screenings(st.session_state.user['id']) if r['disease']==disease and r['model']==model_name]
-        if len(prior)>1:
-            frame=pd.DataFrame([{'Date':r['created_at'],'Model score (%)':r['score']*100} for r in reversed(prior)])
-            trend(frame,'Date','Model score (%)','Saved results · same disease and model')
-            st.caption('Only saved results for this condition and model are compared. Scores are not diagnoses.')
-        else:
-            st.info('Save two assessments for this condition and model to see a history chart.')
+    if doctor:
+        st.caption("No score history is shown for doctor accounts: screenings run here are not tied to one patient, "
+                   "so a trend would mix different people. A linked patient's saved assessments and score history "
+                   "are in Patient Intelligence.")
+    else:
+        with history_tab[0]:
+            from ahead.storage import load_screenings
+            from ahead.visuals import trend
+            prior = [r for r in load_screenings(st.session_state.user['id']) if r['disease']==disease and r['model']==model_name]
+            if len(prior)>1:
+                frame=pd.DataFrame([{'Date':r['created_at'],'Model score (%)':r['score']*100} for r in reversed(prior)])
+                trend(frame,'Date','Model score (%)','Saved results · same disease and model')
+                st.caption('Only saved results for this condition and model are compared. Scores are not diagnoses.')
+            else:
+                st.info('Save two assessments for this condition and model to see a history chart.')
 
     disclaimer()
     return True

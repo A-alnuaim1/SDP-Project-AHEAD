@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from ahead.config import GENDER_CODED_FIELDS
+from ahead.config import GENDER_CODED_FIELDS, pretty_label
 
 
 def age_from_dob(value, today=None):
@@ -41,6 +41,8 @@ def dob_age(dob, disease, stats, reference_date=None):
 # and a BMI or serum creatinine near zero is an entry error, not a patient.
 PHYSICAL_LIMITS = {"physicalhealthdays": (0.0, 30.0), "mentalhealthdays": (0.0, 30.0), "sleephours": (1.0, 24.0),
                    "bmi": (10.0, math.inf), "serumcreatinine": (0.2, math.inf)}
+# The doctor's wording for an optional lab left blank, as in Patient Intelligence.
+OPTIONAL_BLANK = "Not provided (optional; the model used a typical value)"
 
 
 def input_bounds(feature, info):
@@ -92,12 +94,12 @@ def validate_row(values, disease, required, stats, dob=None, reference_date=None
             except (ValueError, TypeError):
                 number = float("nan")
             low, high = input_bounds(feature, info)
-            if not math.isfinite(number):
+            if info.get("binary") and number not in (0, 1):  # NaN too; the record editor shows these fields as words
+                issues.append(f"{feature}: enter {'Male or Female' if feature in GENDER_CODED_FIELDS else 'Yes or No'}.")
+            elif not math.isfinite(number):
                 issues.append(f"{feature}: enter a number.")
             elif info.get("integer") and not number.is_integer():
                 issues.append(f"{feature}: enter a whole number.")
-            elif info.get("binary") and number not in (0, 1):
-                issues.append(f"{feature}: enter 0 or 1.")
             elif not low <= number <= high:
                 issues.append(f"{feature}: {number:g} is too far outside the training range for the model to score; "
                               f"it accepts {low:g} to {high:g}.")
@@ -111,6 +113,34 @@ def validate_row(values, disease, required, stats, dob=None, reference_date=None
             # Keep a failing value exactly as entered so the doctor sees and corrects it; never a truncated guess.
             clean[feature] = entered
     return clean, issues
+
+
+def issue_text(issue):
+    """A stored issue as the doctor reads it. Issues keep the 'feature: message.' form (the record editor and the
+    start-up repair parse it); on screen the feature gets its label and the full stop goes, so lists join cleanly."""
+    feature, sep, message = issue.partition(": ")
+    return (f"{pretty_label(feature)}: {message}" if sep and re.fullmatch(r"\w+", feature) else issue).rstrip(". ")
+
+
+def shown_value(feature, value, info, blank="Not provided"):
+    """A model input as the doctor reads it: Male/Female and No/Yes like the patient form, sentence-case
+    categories and numbers to two decimals. A value that failed validation is shown exactly as entered;
+    a blank reads *blank* (OPTIONAL_BLANK for an optional lab the model filled in)."""
+    if value is None or (isinstance(value, str) and not value.strip()) or (isinstance(value, float) and math.isnan(value)):
+        return blank
+    if info["kind"] == "category":
+        text = str(value).strip()
+        known = text.lower() in {str(option).strip().lower() for option in info["options"]}
+        return text[:1].upper() + text[1:].lower() if known else str(value)
+    try:
+        number = float(value)
+    except (ValueError, TypeError):
+        return str(value)
+    if not math.isfinite(number):
+        return str(value)
+    if info.get("binary") and number in (0, 1):
+        return (("Male", "Female") if feature in GENDER_CODED_FIELDS else ("No", "Yes"))[int(number)]
+    return f"{round(number, 2) + 0.0:.2f}".rstrip("0").rstrip(".")  # + 0.0 turns -0.0 into 0.0
 
 
 def prepare_upload(frame, disease, required, stats, id_columns, reference_date=None):

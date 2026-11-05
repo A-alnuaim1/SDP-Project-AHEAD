@@ -1,4 +1,4 @@
-"""Doctor Overview 'Recent screenings': newest ten first, local (Dubai) date and time for saved and new results."""
+"""Doctor home 'Screenings you ran': newest ten first, local (Dubai) date and time for saved and new results."""
 import json
 import os
 import tempfile
@@ -39,7 +39,7 @@ class RecentScreeningsTests(unittest.TestCase):
         self.assertEqual(at.session_state.nav,'overview')
         return at
     def frame(self,at):
-        return next(e for e in at.expander if e.label=='Recent screenings').dataframe[0]
+        return next(e for e in at.expander if e.label=='Screenings you ran').dataframe[0]
     def table(self,at):
         table=self.frame(at).value.copy()
         table['Date']=table['Date'].dt.strftime(FORMAT)

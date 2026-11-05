@@ -79,6 +79,9 @@ def init_db():
                                    ("previous_id", "INTEGER")):
             if column not in screening_columns:
                 db.execute(f"ALTER TABLE screenings ADD COLUMN {column} {definition}")
+        # The uploaded file's name labels its cohort; cohorts saved before this column show their upload date instead.
+        if "source_name" not in {row["name"] for row in db.execute("PRAGMA table_info(records)")}:
+            db.execute("ALTER TABLE records ADD COLUMN source_name TEXT")
         # One-time repairs of records saved by earlier versions; user_version marks them done so a rerun skips the scans.
         if db.execute("PRAGMA user_version").fetchone()[0] < 1:
             # Values once blocked by the exact training range ("...; verify it.") are rechecked against the wider bounds.
@@ -183,14 +186,15 @@ def change_password(user_id, current, new):
     return True
 
 
-def insert_records(owner_id, cohort, disease, rows):
+def insert_records(owner_id, cohort, disease, rows, source_name=None):
     now = datetime.now(timezone.utc).isoformat()
     with connection() as db:
         for index, row in enumerate(rows, 1):
-            db.execute("""INSERT INTO records(owner_id,cohort,disease,patient_id,source_row,values_json,dob,issues_json,status,created_at,updated_at)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            db.execute("""INSERT INTO records(owner_id,cohort,disease,patient_id,source_row,values_json,dob,issues_json,status,created_at,updated_at,source_name)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                        (owner_id, cohort, disease, row["patient_id"], index, json.dumps(row["values"]),
-                        row.get("dob"), json.dumps(row["issues"]), "Incomplete" if row["issues"] else "Ready", now, now))
+                        row.get("dob"), json.dumps(row["issues"]), "Incomplete" if row["issues"] else "Ready", now, now,
+                        source_name))
 
 
 def list_records(owner_id, disease=None):

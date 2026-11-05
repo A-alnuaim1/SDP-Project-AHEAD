@@ -211,7 +211,7 @@ h1, h2, h3, h4, h5, h6 { color: var(--ahead-title); }
 }
 
 /* ---------------------------------------------------------------- generic cards & text */
-.ahead-card, .metric-card, .condition-card, .action-card, .result-card, .clinical-header, .settings-panel {
+.ahead-card, .condition-card, .action-card, .result-card, .clinical-header, .settings-panel {
     background: var(--ahead-card); border: 1px solid var(--ahead-border); border-radius: 16px; box-shadow: var(--ahead-shadow);
 }
 .eyebrow, .header-eyebrow, .home-eyebrow {
@@ -257,20 +257,6 @@ h1, h2, h3, h4, h5, h6 { color: var(--ahead-title); }
     background: rgba(255,255,255,0.1) !important; color: white !important; border: 1px solid rgba(255,255,255,0.35) !important;
 }
 .st-key-home_hero .st-key-hero_ask button:hover { background: rgba(255,255,255,0.18) !important; border-color: white !important; color: white !important; }
-
-/* KPI cards */
-.metric-card { padding: 16px 18px; min-height: 108px; display: flex; gap: 12px; align-items: flex-start; min-width: 0; overflow: hidden; }
-.metric-card > div { min-width: 0; }
-.metric-icon {
-    width: 42px; height: 42px; min-width: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
-    background: var(--ahead-accent-soft); color: var(--ahead-accent); font-weight: 800; font-size: 1rem;
-}
-.metric-icon.danger { background: var(--ahead-danger-soft); color: var(--ahead-danger); }
-.metric-icon.success { background: var(--ahead-success-soft); color: var(--ahead-success); }
-.metric-icon.warning { background: var(--ahead-warning-soft); color: var(--ahead-warning); }
-.metric-label { color: var(--ahead-muted); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.64rem; font-weight: 680; line-height: 1.3; }
-.metric-value { color: var(--ahead-title); font-size: clamp(1.1rem, 1.6vw, 1.55rem); font-weight: 760; margin-top: 4px; line-height: 1.1; overflow-wrap: anywhere; }
-.metric-foot { color: var(--ahead-accent); font-size: 0.68rem; margin-top: 5px; }
 
 /* condition cards — the keyed container is the card, tinted with its condition's colour (--condition) */
 [class*="_condition_card"] {
@@ -371,7 +357,7 @@ h1, h2, h3, h4, h5, h6 { color: var(--ahead-title); }
 
 .factor-chip {
     display: inline-block; margin: 0 8px 8px 0; padding: 7px 12px; border-radius: 100px; font-size: 0.76rem; font-weight: 600;
-    background: var(--ahead-warning-soft); color: var(--ahead-warning); border: 1px solid transparent;
+    background: var(--ahead-warning-soft); color: color-mix(in srgb, var(--ahead-warning) 60%, var(--ahead-title)); border: 1px solid transparent;
 }
 
 .notice { border-radius: 12px; padding: 14px 16px; font-size: 0.77rem; line-height: 1.55; margin-top: 16px; border: 1px solid var(--ahead-border); }
