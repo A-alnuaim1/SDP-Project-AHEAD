@@ -13,7 +13,7 @@ from streamlit.proto.Metric_pb2 import Metric
 from streamlit.testing.v1 import AppTest
 
 import ahead.platform_data as platform_data
-from ahead.storage import init_db,create_user,authenticate,connection,insert_records,save_screening
+from ahead.storage import init_db,create_user,authenticate,connection,save_screening
 from ahead.platform_data import (init_platform,grant_doctor,revoke_doctor,save_plan,plan_status,plans,
     scheduled_doses,mark_dose,notifications,local_today,activity_counts,event,open_doses)
 from ahead.pages.doctor_intelligence import NO_PATIENTS
@@ -372,25 +372,12 @@ class PatientIntelligenceTests(DoctorFixture):
         at=self.page(self.d,'intelligence')
         for title in ('Saved assessment activity','Assessments over time'):self.assertEqual(self.xaxis(at,title),(None,None))
 
-    def test_data_quality_reports_success_only_after_checking_data(self):
+    def test_every_tab_explains_how_patients_link_when_none_are_linked(self):
         create_user('e@test.com','safe-password-123','Doctor','Dr Empty')
         at=self.page(authenticate('e@test.com','safe-password-123','Doctor'),'intelligence')
-        # One notice per tab (seven with Prevention Plan); the eighth info is the page's standing note about who appears here.
-        self.assertEqual((len(at.success),[i.value for i in at.info].count(NO_PATIENTS),len(at.info)),(0,7,8))
-        at=self.page(self.d,'intelligence')
-        self.assertEqual(len(at.success),0)
-        self.assertTrue(any('nothing to check' in i.value for i in at.info))
-        self.screening('diabetes','GradientBoosting',.4)
-        at=self.page(self.d,'intelligence')
-        self.assertEqual([s.value for s in at.success],['No detected issues in linked patient assessments or uploaded records.'])
-
-    def test_data_quality_patient_column_is_unambiguous_text(self):
-        self.screening('diabetes','GradientBoosting',.4,values={'age':30,'HbA1c_level':None})
-        a=self.patient('a@test.com','Sam Lee');b=self.patient('b@test.com','Sam Lee')
-        # An uploaded PatientID equal to an account ID must not read as that account.
-        insert_records(self.d['id'],'cohort','diabetes',[{'patient_id':pid,'values':{'age':40},'dob':None,'issues':['Missing value for bmi']} for pid in (str(self.p['id']),'P-1')])
-        with self.assertNoLogs('streamlit.dataframe_util','INFO'):at=self.page(self.d,'intelligence')
-        self.assertEqual(sorted(self.frame(at,'Severity')['Patient']),sorted([f"Sam Lee (ID {a['id']})",f"Sam Lee (ID {b['id']})",f"p@test.com (ID {self.p['id']})",f"Upload · {self.p['id']}",'Upload · P-1']))
+        # One notice per tab (six: Data Quality was removed); the seventh info is the page's standing note about who appears here.
+        self.assertEqual([t.label for t in at.tabs],['Overview','Disease Analytics','Patient Records & History','Medication Monitoring','Prevention Plan','Clinical Insights'])
+        self.assertEqual((len(at.success),[i.value for i in at.info].count(NO_PATIENTS),len(at.info)),(0,6,7))
 
 
 if __name__=='__main__':unittest.main()

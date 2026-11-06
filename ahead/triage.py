@@ -19,7 +19,8 @@ with labs already in these ranges, so AHEAD sorts results into tracks instead of
 
 Pure Python (no Streamlit), so pages, reports and scripts share it. Values may arrive as numbers or as text (uploaded
 CSV rows); a blank, non-numeric or non-finite value counts as not entered and never trips a rule. Nothing here is a
-diagnosis: every urgent reason says a doctor needs to confirm it with tests.
+diagnosis: every urgent reason says a doctor needs to confirm it with tests. missing_tests() names the test a doctor
+asks for when a value an urgent rule reads was left blank, in the same words on every doctor surface.
 """
 
 import json
@@ -125,7 +126,7 @@ _RANGE = {   # what an urgent value's range means, per rule kind and audience
 
 
 def rule_table(disease: str) -> list:
-    """The urgent rules as rows, for reports and the clinician review."""
+    """The urgent rules as rows: the reviewed rule design, checked against RULES by the tests."""
     return [{"feature": rule.feature, "label": rule.label, "kind": rule.kind, "rule": rule.text(),
              "flagged_only": rule.kind == ADULTS_ONLY, "note": rule.note} for rule in _rules(disease)]
 
@@ -409,7 +410,7 @@ def is_urgent_saved(disease: str, values_json, score=None, threshold=None) -> bo
     return triage_saved(disease, values_json, score, threshold)["urgent"]
 
 
-def _entered_features(values_json) -> set:
+def entered_features(values_json) -> set:
     """The inputs a saved screening has a value for (unreadable JSON counts as none)."""
     values = _saved_values(values_json)
     return {feature for feature, value in values.items() if entered(value) is not None}
@@ -433,5 +434,103 @@ def open_urgent(rows) -> list:
         if reasons:
             found[disease] = (row, dict(result, reasons=reasons))
         else:
-            later |= _entered_features(row["values_json"])
+            later |= entered_features(row["values_json"])
     return list(found.values())
+
+
+# =============================================================================
+# TESTS TO ASK FOR
+# =============================================================================
+
+@dataclass(frozen=True)
+class LabTest:
+    """
+    A test to ask for when a screening left blank a value an urgent rule reads: the model used a typical value instead
+    and the urgent check could not use it.
+
+    asks:   the values whose blank asks for this test.
+    covers: the blank values the test also stands for (asks included), so related blanks become one action: an HbA1c
+            test stands for a blank blood glucose too, and one blood pressure reading for both numbers.
+    action: what the doctor does, as a clause ("ask for an HbA1c test").
+    name:   what to call the values when every one in covers is blank ("blood pressure"); otherwise each blank value
+            is named by its rule ("HbA1c and blood glucose", "diastolic blood pressure").
+    """
+    asks: tuple
+    covers: tuple
+    action: str
+    name: str = ""
+
+
+# In the order a doctor reads them; every urgent-rule value except the age rules and the kidney tests below. eGFR and
+# urine ACR are not here: with serum creatinine they are the tests a kidney screening needs for a score
+# (config.REQUIRED_FOR_SCORE), so a screening without them gets no score and is not saved. Heart has no urgent rule.
+LAB_TESTS = {
+    "diabetes": (
+        LabTest(("HbA1c_level",), ("HbA1c_level", "blood_glucose_level"), "ask for an HbA1c test"),
+        LabTest(("blood_glucose_level",), ("blood_glucose_level",), "ask for a blood glucose test"),
+    ),
+    "heart": (),
+    "kidney": (
+        LabTest(("HbA1c",), ("HbA1c", "FastingBloodSugar"), "ask for an HbA1c test"),
+        LabTest(("FastingBloodSugar",), ("FastingBloodSugar",), "ask for a fasting blood sugar test"),
+        LabTest(("SystolicBP", "DiastolicBP"), ("SystolicBP", "DiastolicBP"), "check the patient's blood pressure",
+                name="blood pressure"),
+    ),
+}
+
+
+def missing_tests(disease: str, values, later=()) -> list:
+    """
+    The tests to ask for because a screening left blank a value an urgent rule reads, in LAB_TESTS order, each once.
+    The doctor home's at-risk rows, the doctor's record view and the Prevention Plan strip all show these words.
+
+    values: the saved inputs, as a dict or as saved JSON text. A value counts as left blank only when the inputs
+    include it and entered() reads it as not entered, so an older record saved without its inputs asks for nothing.
+    later:  the values a newer screening of the same condition entered (entered_later); a value entered there counts
+            as entered, so the ask clears once the patient has had the test and screened again.
+    An entered age under 18 asks for nothing: these tests come from adult cut-offs, and a flagged child's urgent
+    reason already says a doctor needs to confirm the result with tests.
+
+    Returns [{'features', 'label', 'action', 'line', 'doctor'}]; for a blank HbA1c:
+      features  ['HbA1c_level']
+      label     'HbA1c'
+      action    'ask for an HbA1c test'
+      line      'HbA1c not entered · ask for an HbA1c test'                                  (rows and the strip)
+      doctor    'HbA1c not entered: the model used a typical value. Ask for an HbA1c test.'   (the record view)
+    """
+    rules = {rule.feature: rule for rule in _rules(disease) if rule.kind != ADULTS_ONLY}
+    values = _saved_values(values)
+    age = next((rule for rule in _rules(disease) if rule.kind == ADULTS_ONLY), None)
+    if age is not None and age.trips(values.get(age.feature)):
+        return []
+    later = set(later)
+    blank = {feature for feature in rules
+             if feature in values and feature not in later and entered(values[feature]) is None}
+    found = []
+    for test in LAB_TESTS[disease]:
+        if not blank & set(test.asks):
+            continue
+        covered = [feature for feature in test.covers if feature in blank]
+        blank -= set(covered)
+        label = test.name if test.name and len(covered) == len(test.covers) else \
+            " and ".join(rules[feature].name for feature in covered)
+        label = label[:1].upper() + label[1:]
+        typical = "a typical value" if len(covered) == 1 else "typical values"
+        found.append({"features": covered, "label": label, "action": test.action,
+                      "line": f"{label} not entered · {test.action}",
+                      "doctor": f"{label} not entered: the model used {typical}. "
+                                f"{test.action[:1].upper()}{test.action[1:]}."})
+    return found
+
+
+def entered_later(rows) -> dict:
+    """
+    For saved screenings newest first: {row id: the values a newer screening by the same patient for the same
+    condition entered}, the `later` argument of missing_tests. Rows without an owner_id count as one patient's.
+    """
+    seen, found = {}, {}
+    for row in rows:
+        mine = seen.setdefault((row.get("owner_id"), row["disease"]), set())
+        found[row["id"]] = set(mine)
+        mine |= entered_features(row["values_json"])
+    return found

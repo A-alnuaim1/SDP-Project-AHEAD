@@ -137,7 +137,9 @@ class StripTests(Fixture):
         self.assertIn(f'Diabetes · model score 55.0% · screened {pv.date_text(local_today())} '
                       '<span class="track-pill at-risk" title="At risk">At risk</span>', html)
         self.assertIn(pv.FIT['at_risk'], html)
-        self.assertIn('<p class="track-panel-note">BMI 31.2 · former smoker · HbA1c not entered</p>', html)
+        # The facts line, then the blank lab as its own line in the doctor home's words (triage.missing_tests).
+        self.assertIn('<p class="track-panel-note">BMI 31.2 · former smoker</p>'
+                      '<p class="track-panel-note">HbA1c not entered · ask for an HbA1c test</p>', html)
 
     def test_an_urgent_result_puts_a_visit_first_but_still_allows_a_plan(self):
         save_screening(self.p['id'], 'diabetes', 'GradientBoosting', .8, 1, .5, {**AT_RISK, 'HbA1c_level': 7.1})
@@ -159,6 +161,8 @@ class StripTests(Fixture):
         html = self.html(at)
         self.assertIn(pv.FIT['urgent_child'], html)
         self.assertNotIn(pv.FIT['at_risk'], html)
+        # HbA1c was left blank, but the tests to ask for come from adult cut-offs, so a child gets none.
+        self.assertNotIn('not entered', html)
         self.assertTrue(all(self.widget(at, 'checkbox', label).disabled for label in INCLUDE.values()))
         self.assertIn(pv.CHILD_REASON, self.captions(at))
 

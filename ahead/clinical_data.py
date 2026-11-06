@@ -42,7 +42,7 @@ def dob_age(dob, disease, stats, reference_date=None):
 PHYSICAL_LIMITS = {"physicalhealthdays": (0.0, 30.0), "mentalhealthdays": (0.0, 30.0), "sleephours": (1.0, 24.0),
                    "bmi": (10.0, math.inf), "serumcreatinine": (0.2, math.inf)}
 # The doctor's wording for an optional lab left blank, as in Patient Intelligence.
-OPTIONAL_BLANK = "Not provided (optional; the model used a typical value)"
+OPTIONAL_BLANK = "Not provided (the model used a typical value)"
 
 
 def input_bounds(feature, info):

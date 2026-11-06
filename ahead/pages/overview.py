@@ -20,7 +20,7 @@ from ahead.components import (condition_cards, current_user, disclaimer, go_to, 
 from ahead.config import DISEASES, model_label
 from ahead.platform_data import analytics, local_now, local_today, plans, scheduled_doses, to_local
 from ahead.resources import icon_uri
-from ahead.triage import TRACKS, triage_saved
+from ahead.triage import TRACKS, entered_later, missing_tests, triage_saved
 from ahead.visuals import summary_card
 
 HONORIFIC = re.compile(r"^(?:(?:dr|doctor|prof|mr|mrs|ms)(?:\.\s*|\s+|$))+", re.IGNORECASE)
@@ -74,10 +74,13 @@ def _care_snapshot(doctor_id: int) -> dict:
     """
     Linked patients, recent assessment counts and the patients needing a look: urgent first, then newest. A patient
     needs a look for a flagged or urgent result in the last 30 days (sorted from the saved values, score and
-    threshold, so an urgent value counts even when the model did not flag it) or a missed dose today.
+    threshold, so an urgent value counts even when the model did not flag it) or a missed dose today. Each item's
+    "later" holds, per flagged assessment, the values a newer screening of the same condition entered, so a test the
+    row would ask for is dropped once the patient has had it (triage.missing_tests).
     """
     people, assessments = analytics(doctor_id)
     today = local_today()
+    later = entered_later(assessments)
     rows, week, flagged = {}, 0, 0
     for a in assessments:  # newest first
         moment = to_local(a["created_at"]).replace(tzinfo=None)
@@ -101,6 +104,7 @@ def _care_snapshot(doctor_id: int) -> dict:
     for row in rows.values():  # the row leads with the most pressing result, the newest one on that track
         row["flags"].sort(key=lambda flag: TRACKS.index(flag[2]["track"]))
     items = [{"id": pid, "name": names[pid], **row, "urgent": bool(row["flags"]) and row["flags"][0][2]["urgent"],
+              "later": {a["id"]: later[a["id"]] for _, a, _ in row["flags"]},
               "latest": max([m for m, *_ in row["flags"]] + [datetime.fromisoformat(f"{d['date']}T{d['time']}") for d in row["doses"]])}
              for pid, row in rows.items() if pid in names]
     items.sort(key=lambda item: (item["urgent"], item["latest"]), reverse=True)
@@ -126,6 +130,10 @@ def _attention_row(item: dict, today) -> None:
         lines.append(f"{label} · {a['score'] * 100:.0f}% · {_when(moment, today)}{more}")
         if track["urgent"]:
             lines.append(_reason(track))
+        else:   # at risk: a lab the patient left blank and has not entered since is the test to ask for (an urgent
+            # row goes to a visit first)
+            tests = missing_tests(a["disease"], a["values_json"], item["later"].get(a["id"], ()))
+            lines += [test["line"] for test in tests]
     for name, count in Counter(d["name"] for d in item["doses"]).items():
         lines.append(f"{name} · {_plural(count, 'dose')} missed today")
     # The shared track pill (the same words as every other surface): Urgent, or At risk for a flag with no urgent value.

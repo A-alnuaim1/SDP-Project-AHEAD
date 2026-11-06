@@ -1,5 +1,4 @@
 """Patient Intelligence restyle: the doctor-home focus contract, summary tiles, plan actions and readable records."""
-import hashlib
 import json
 import os
 import re
@@ -16,15 +15,11 @@ from streamlit.testing.v1 import AppTest
 import ahead.pages.doctor_intelligence as page
 import ahead.platform_data as platform_data
 from ahead.resources import icon_uri
-from ahead.storage import init_db,create_user,authenticate,connection,insert_records,save_screening
+from ahead.storage import init_db,create_user,authenticate,connection,save_screening
 from ahead.platform_data import init_platform,grant_doctor,save_plan,plan_status,plans,mark_dose,local_today,event,ai_consent,save_lifestyle
 
 APP=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),'app.py')
 FORM=['Medication name','Dosage','Instructions','Exact times (HH:MM, comma separated)','Scheduled days','Start date','End date','Doctor notes']
-
-
-def readable(day):
-    return f'{day.day} {day:%b %Y}'
 
 
 def blocks(node):
@@ -160,8 +155,10 @@ class DesignTests(IntelligenceFixture):
         self.assertEqual(len(at.metric),0)
         self.assertEqual((len(at.subheader),len(at.warning),len(at.get('json'))),(0,0,0))
         self.assertTrue(at.info[0].value.startswith('Only patients who add your doctor email'))
-        for heading in ('Saved assessments','Recent assessments','Medication plans','Pre-consultation record summary','Data-quality checklist'):
+        for heading in ('Saved assessments','Recent assessments','Medication plans','Pre-consultation record summary'):
             self.assertIn(f'<h2>{heading}</h2>',html)
+        # The Data Quality tab was removed; its one useful idea (ask for a lab left blank) moved to the records view.
+        self.assertNotIn('Data Quality',page.TABS);self.assertNotIn('Data-quality checklist',html)
         # Subtitles describe what is shown: all 3 assessments, and the assessment events stacked in the activity chart.
         self.assertIn('<h2>Recent assessments</h2><p>Every assessment your linked patients saved, newest first.</p>',html)
         self.assertIn('<p>Sign-ins, saved assessments, meals, lifestyle check-ins, challenge days and dose logs from linked patients.</p>',html)
@@ -290,8 +287,6 @@ class MedicationTests(IntelligenceFixture):
     def test_every_table_serialises_without_arrow_fallbacks(self):
         self.screening('diabetes','GradientBoosting',.4,{'age':30,'bmi':None,'HbA1c_level':None})
         pid=self.plan();mark_dose(self.p['id'],pid,(local_today()-timedelta(days=1)).isoformat(),'00:00','taken')
-        insert_records(self.d['id'],'cohort','diabetes',[{'patient_id':x,'values':{'age':40},'dob':None,'issues':['bmi: missing; enter a value before scoring.']}
-                                                          for x in (str(self.p['id']),'=CMD()','P-1')])
         save_lifestyle(self.p['id'],{'sleep_hours':7},{'overall':70,'categories':{}})
         with self.assertNoLogs('streamlit.dataframe_util','INFO'):self.medication(pid)
 
@@ -324,34 +319,6 @@ class RecordTests(IntelligenceFixture):
         self.assertEqual([t['name'] for t in history['data']],['Diabetes · Gradient boosting'])
         self.assertTrue(any(c.value.startswith('Diabetes · Gradient boosting: assessment #') for c in at.caption))
         self.assertEqual(list(self.frame(at,'ID')['Model']),['Gradient boosting']*2)
-
-    def test_data_quality_names_the_assessment_and_lists_review_first(self):
-        sid=self.screening('diabetes','GradientBoosting',.4,{'age':30,'HbA1c_level':None,'bmi':None})
-        # Issues as ahead/clinical_data.validate_row stores them, under the cohort key the Clinical Dashboard gives an upload.
-        insert_records(self.d['id'],'diabetes-'+hashlib.sha256(b'clinic').hexdigest()[:16],'diabetes',[{'patient_id':'P-1','values':{'age':40},'dob':None,'issues':[
-            'HbA1c_level: missing; enter a value before scoring.','blood_glucose_level: enter a number.',
-            'bmi: 99 is too far outside the training range for the model to score; it accepts 10 to 95.',
-            'age: entered age conflicts with DOB; verify both.','Invalid date of birth; use YYYY-MM-DD.']}],source_name='clinic_a.csv')
-        at=self.page()
-        rows=self.frame(at,'Severity')
-        self.assertEqual(list(rows.columns),['Severity','Type','Patient','Record','Action'])
-        self.assertEqual(list(rows['Severity']),['Review']*6+['Info'])
-        with connection() as db:moment,uploaded=[datetime.fromisoformat(db.execute(query,args).fetchone()['created_at']).astimezone(ZoneInfo('Asia/Dubai'))
-                                                 for query,args in (('SELECT created_at FROM screenings WHERE id=?',(sid,)),('SELECT created_at FROM records',()))]
-        record=f"Diabetes assessment · {readable(moment.date())}, {moment:%H:%M}"
-        # Named like the Clinical Dashboard's upload list, never by the internal cohort key.
-        upload=f"clinic_a.csv · uploaded {readable(uploaded.date())}, {uploaded:%H:%M} · Diabetes · row 1"
-        self.assertEqual(list(zip(rows['Type'],rows['Record'])),[('Missing: Body Mass Index (BMI)',record),
-            ('Missing: HbA1c Level (%)',upload),('Invalid value: Blood Glucose Level (mg/dL)',upload),('Outside model range: Body Mass Index (BMI)',upload),
-            ('Date of birth conflict: Age',upload),('Invalid date of birth',upload),('Not provided: HbA1c Level (%)',record)])
-        actions=list(rows['Action'][1:6])
-        self.assertEqual(actions[:2],['HbA1c Level (%): missing; enter a value before scoring. Confirm and correct under Clinical Dashboard.',
-                                      'Blood Glucose Level (mg/dL): enter a number. Confirm and correct under Clinical Dashboard.'])
-        self.assertEqual(actions[4],'Invalid date of birth; use YYYY-MM-DD. Confirm and correct under Clinical Dashboard.')
-        self.assertFalse([t for t in [*rows['Type'],*rows['Action']] if '_' in t or '..' in t])
-        # Uploads saved before file names were kept still get a readable name.
-        with connection() as db:db.execute('UPDATE records SET source_name=NULL')
-        self.assertEqual(set(self.frame(self.page(),'Severity')['Record'])-{record},{upload.replace('clinic_a.csv','Uploaded file')})
 
 
 class InsightTests(IntelligenceFixture):

@@ -1,6 +1,5 @@
 """Doctor analytics over consent-linked patient accounts; existing clinical upload stays separate."""
 import json
-import re
 from collections import Counter
 from datetime import date,timedelta
 from html import escape
@@ -10,19 +9,17 @@ import plotly.express as px
 import streamlit as st
 
 from ahead import prevention as pv
-from ahead.clinical_data import issue_text
 from ahead.components import TRACK_CLASS,markdown_literal,page_header,section_heading,track_pill_html
 from ahead.config import DISEASES,GENDER_CODED_FIELDS,OPTIONAL_INPUTS,model_label,pretty_label
 from ahead.platform_data import (activity_counts,ai_consent,analytics,approve_prevention_plan,clock_time,linked_patients,lifestyle_history,
     patient_screenings,plan_status,plans,prevention_plan_status,prevention_plans,prevention_progress,save_plan,save_prevention_draft,
     scheduled_doses,local_today,to_local,update_prevention_plan)
 from ahead.resources import gemini_available,chat_reply,icon_uri
-from ahead.storage import list_records
-from ahead.triage import LABELS,entered,open_urgent,rule_table,track_text,triage_saved
+from ahead.triage import LABELS,entered_later,missing_tests,open_urgent,track_text,triage_saved
 from ahead.visuals import summary_tile
 from ahead.theme import style_figure,show_chart
 
-TABS=['Overview','Disease Analytics','Patient Records & History','Medication Monitoring','Prevention Plan','Clinical Insights','Data Quality']
+TABS=['Overview','Disease Analytics','Patient Records & History','Medication Monitoring','Prevention Plan','Clinical Insights']
 PICKERS=('records_patient','med_patient','plan_patient','insight_patient')
 DAYS=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
 NO_PATIENTS='No patient accounts have linked to you yet. Ask a patient to add your email under Settings → Preferences → Care team access.'
@@ -42,12 +39,9 @@ PLAN_STATUS={'active':('Active','#2E9477'),'paused':('Paused','#B7821E'),'stoppe
 # The prevention strip's icon per track, as on the patient's own track panel.
 STRIP_ICON={'urgent':'flagged','at_risk':'scored','not_flagged':'review','no_score':'screenings'}
 NOTE_EXAMPLE='Small steps count: a 30-minute walk on most days is a great start.'
-# Stored upload issues read 'feature: message.' (ahead/clinical_data.validate_row); the first matching phrase names the kind.
-UPLOAD_ISSUES=(('conflicts with dob','Date of birth conflict'),('date of birth','Invalid date of birth'),('missing','Missing'),
-               ('training range','Outside model range'))
 # The other 0/1-coded model inputs (GENDER_CODED_FIELDS read Male/Female); the screening form shows them as No/Yes.
 YES_NO={'hypertension','heart_disease','Smoking','FamilyHistoryKidneyDisease','FamilyHistoryHypertension','FamilyHistoryDiabetes','Edema'}
-BLANK='Not provided (optional; the model used a typical value)'
+BLANK='Not provided (the model used a typical value)'
 LOCAL_TIME={'Date':st.column_config.DatetimeColumn(format='D MMM YYYY, HH:mm')}
 
 
@@ -251,6 +245,10 @@ def _records(doctor_id):
     if values:
         st.caption(f"{_label(selected['disease'])} · {model_label(selected['model'])} · score {selected['score']:.1%} against a {selected['threshold']:.1%} threshold · "
                    f"{_result(selected)} · {_track_words(_track(selected))}")
+        # The next step when the patient left a lab blank and no newer screening of the condition entered it, in the
+        # same words as the doctor home and the Prevention Plan strip (triage.missing_tests); the table below marks each
+        # blank value. No icon of its own: the theme draws every info box's icon.
+        if tests:=missing_tests(selected['disease'],values,entered_later(rows)[selected['id']]):st.info('\n\n'.join(t['doctor'] for t in tests))
         st.dataframe(pd.DataFrame([{'Input':pretty_label(k),'Value':_input(selected['disease'],k,v)} for k,v in values.items()]),hide_index=True,width='stretch')
     else:st.caption('This earlier assessment predates input-history storage; its values are unavailable.')
     st.caption('Historical assessments remain separate; making a new prediction does not overwrite them.')
@@ -367,18 +365,16 @@ def _suggested_condition(rows):
     return next((d for d,r in latest.items() if _track(r)['track']=='at_risk'),next(iter(latest),'diabetes'))
 
 
-def _not_entered(disease,values):
-    """Urgent-rule values the screening left blank, so the urgent check could not use them ('HbA1c not entered')."""
-    labels=[r['label'] for r in rule_table(disease) if not r['flagged_only'] and r['feature'] in values and entered(values[r['feature']]) is None]
-    return [f'{label} not entered' for label in dict.fromkeys(labels)]
-
-
 def _strip_html(disease,latest,values,life):
     """The condition's latest result as a track panel: its track pill, why a plan fits that track (an urgent result
-    needs a visit first, with its reasons), and the facts the targets depend on."""
-    facts=pv.facts(disease,values,life)+_not_entered(disease,values)
-    note=f'<p class="track-panel-note">{escape(" · ".join(facts))}</p>' if facts else ''
+    needs a visit first, with its reasons), the facts the targets depend on, then each test to ask for because the
+    screening left a lab blank, one per line in the doctor home's words (triage.missing_tests). Under 18 there is no
+    test line: the tests come from adult cut-offs, and the summary already says to agree any plan outside AHEAD."""
     child=pv.child_age(disease,values,life) is not None   # no target is offered under 18, so the line says so
+    facts=pv.facts(disease,values,life)
+    # missing_tests leaves out a screening's own age under 18; child also covers a tracker log's age when it has none.
+    notes=([' · '.join(facts)] if facts else [])+([] if child else [t['line'] for t in missing_tests(disease,values)])
+    note=''.join(f'<p class="track-panel-note">{escape(n)}</p>' for n in notes)
     if latest is None:
         track,css,style,pill,reasons='no_score','track-panel',' style="--tone:#5B8FA3"','',''
         title=f'No saved {_label(disease)} screening yet'
@@ -648,44 +644,6 @@ def _prevention(doctor_id):
         _plan_history(plan,sum(p['status']=='stopped' and bool(p['started_at']) and p['id']!=selected for p in existing))
 
 
-def _upload_issue(issue):
-    """The Type of a stored upload issue, named like the assessment rows ('Missing: HbA1c Level (%)')."""
-    kind=next((name for phrase,name in UPLOAD_ISSUES if phrase in issue.lower()),'Invalid value');field,sep,_=issue.partition(': ')
-    return f'{kind}: {pretty_label(field)}' if sep and re.fullmatch(r'\w+',field) else kind
-
-
-def _quality(doctor_id):
-    people,assessments=analytics(doctor_id);uploaded=list_records(doctor_id)
-    if not people and not uploaded:st.info(NO_PATIENTS);return
-    # Always text: linked accounts by name and ID, upload rows by their file ID, so the two never look alike.
-    problems=[];who=_names(people)
-    names=Counter(p['name'].strip().lower() for p in people)
-    for p in people:
-        if names[p['name'].strip().lower()]>1:problems.append({'Severity':'Review','Type':'Possible duplicate name','Patient':who[p['id']],'Record':'Linked account','Action':'Check identifiers before linking records.'})
-    for a in assessments:
-        record=f"{_label(a['disease'])} assessment · {_when(a['created_at'])}";values=json.loads(a.get('values_json') or '{}')
-        if not values:problems.append({'Severity':'Info','Type':'Earlier record lacks input history','Patient':who[a['owner_id']],'Record':record,'Action':'Keep the existing result; newer assessments will save their input values.'})
-        for key,value in values.items():
-            if value is None or value=='':
-                if key in OPTIONAL_INPUTS.get(a['disease'],[]):
-                    problems.append({'Severity':'Info','Type':f'Not provided: {pretty_label(key)}','Patient':who[a['owner_id']],'Record':record,'Action':'Optional measurement left blank by the patient; the model used a typical value. Ask for a recent reading or result if relevant.'})
-                else:problems.append({'Severity':'Review','Type':f'Missing: {pretty_label(key)}','Patient':who[a['owner_id']],'Record':record,'Action':'Confirm at the next assessment; no values are invented.'})
-    identifiers=Counter((r['cohort'],r['patient_id'].strip().lower()) for r in uploaded)
-    for row in uploaded:
-        # Named like the Clinical Dashboard's upload list; rows saved before file names were kept read 'Uploaded file'.
-        record=f"{row.get('source_name') or 'Uploaded file'} · uploaded {_when(row['created_at'])} · {_label(row['disease'])} · row {row['source_row']}"
-        if identifiers[(row['cohort'],row['patient_id'].strip().lower())]>1:
-            problems.append({'Severity':'Review','Type':'Duplicate patient ID within upload','Patient':f"Upload · {row['patient_id']}",'Record':record,'Action':'Verify row identity before interpreting both records.'})
-        for issue in json.loads(row['issues_json'] or '[]'):
-            problems.append({'Severity':'Review','Type':_upload_issue(issue),'Patient':f"Upload · {row['patient_id']}",'Record':record,
-                             'Action':issue_text(issue)+'. Confirm and correct under Clinical Dashboard.'})
-    section_heading('Data-quality checklist','Items to review come first, then notes for information.')
-    if problems:st.dataframe(pd.DataFrame(problems).drop_duplicates().sort_values('Severity',key=lambda s:s.map({'Review':0,'Info':1}),kind='stable'),hide_index=True,width='stretch')
-    elif assessments or uploaded:st.success('No detected issues in linked patient assessments or uploaded records.')
-    else:st.info('Your linked patients have not saved any disease assessments yet, so there is nothing to check.')
-    st.caption('This is a deterministic data-quality checklist, not an AI clinical judgement. The existing Clinical Dashboard checks uploaded CSV/XLSX rows in more detail.')
-
-
 def _same_model(rows):
     """Per condition, newest first: its latest assessment and the previous one from the same model (or None)."""
     return [(mine[0],next((r for r in mine[1:] if r['model']==mine[0]['model']),None))
@@ -780,7 +738,7 @@ def _focus(doctor_id):
 def render_doctor_intelligence():
     if st.session_state.user.get('role')!='Doctor':st.error('Doctor access required.');return
     doctor=st.session_state.user['id']
-    page_header('Care team','Advanced Analytics & Patient Intelligence','Consent-linked patient histories, medication and prevention plans, and data quality.')
+    page_header('Care team','Advanced Analytics & Patient Intelligence','Consent-linked patient histories, medication and prevention plans, and pre-consultation summaries.')
     st.info('Only patients who add your doctor email in their settings appear here. The separate Clinical Dashboard manages imported files.')
     tab,notice=_focus(doctor);slot=st.empty()
     if notice:slot.info(notice)
@@ -788,5 +746,5 @@ def render_doctor_intelligence():
     # tabs first appear (the doctor home always opens this page afresh) and keeps the open tab on later runs; the
     # slot above always holds one element so the tabs never move and remount on the next run.
     tabs=st.tabs(TABS,default=tab)
-    for tab,func in zip(tabs,[_overview,_disease,_records,_medication,_prevention,_insights,_quality]):
+    for tab,func in zip(tabs,[_overview,_disease,_records,_medication,_prevention,_insights]):
         with tab:func(doctor)

@@ -154,7 +154,7 @@ class ClinicalDesignTests(unittest.TestCase):
         self.assertEqual(shown_value("SystolicBP", 100.0, stats["SystolicBP"]), "100")
         self.assertEqual([shown_value("BMI", v, stats["BMI"]) for v in (None, "", float("nan"))], ["Not provided"] * 3)
         self.assertEqual(shown_value("GFR", None, stats["GFR"], OPTIONAL_BLANK),
-                         "Not provided (optional; the model used a typical value)")
+                         "Not provided (the model used a typical value)")
         self.assertEqual(shown_value("BMI", "abc", stats["BMI"]), "abc")  # a failed entry stays as typed
         diabetes = feature_summary("diabetes")
         self.assertEqual([shown_value("smoking_history", v, diabetes["smoking_history"]) for v in ("No Info", "never", "not current")],

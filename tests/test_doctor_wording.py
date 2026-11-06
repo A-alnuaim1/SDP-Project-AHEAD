@@ -166,7 +166,7 @@ class DoctorWordingTests(unittest.TestCase):
         result["kidney"]["missing"] = ["HemoglobinLevels"]
         at = self.page(self.doctor, "screenings", active_screening="kidney", last_results=result)
         entered = next(df.value for df in at.dataframe if list(df.value.columns) == ["Input", "Value"]).set_index("Input")["Value"]
-        self.assertEqual(entered["Hemoglobin Level"], "Not provided (optional; the model used a typical value)")
+        self.assertEqual(entered["Hemoglobin Level"], "Not provided (the model used a typical value)")
         self.assertFalse([v for v in entered if v == "Not entered"])
         # Every remaining row reads the same once rounded: the doctor is told so, with no empty chart.
         with mock.patch.object(screening, "individual_sensitivity", return_value=SENSITIVITY[2:3]):

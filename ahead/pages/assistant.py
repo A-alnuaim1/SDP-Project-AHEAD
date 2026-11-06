@@ -59,8 +59,8 @@ DOCTOR_SYSTEM_PROMPT = SYSTEM_PROMPT.rsplit("Keep answers", 1)[0] + (
     "patient accounts only, so do not send the clinician there. Patients link to a doctor themselves under "
     "Settings, Preferences, Care team access, by entering the doctor's account email. Patient Intelligence shows "
     "only linked patients: their saved assessments and score history, activity, medication plans the doctor creates "
-    "with the dose log, a record-based pre-consultation summary (plus an optional Gemini summary only with the "
-    "patient's permission) and data-quality checks. The Clinical Dashboard imports a CSV or Excel file of "
+    "with the dose log, and a record-based pre-consultation summary (plus an optional Gemini summary only with the "
+    "patient's permission). The Clinical Dashboard imports a CSV or Excel file of "
     "de-identified records for one condition, checks it, scores the eligible rows and records a review decision "
     "per row. You cannot see any patient's records. If the clinician pastes identifiable patient details, do not "
     "repeat them; remind them that the consent-gated summary is in Patient Intelligence. "
@@ -131,13 +131,13 @@ DOCTOR_LOCAL_ANSWERS = {
     "patient intelligence": (
         "**Advanced Analytics & Patient Intelligence** shows only patients who linked their account to you:\n\n"
         "- **Overview** and **Disease Analytics**: linked patients, saved assessments and recent activity.\n"
-        "- **Patient Records & History**: each patient's saved assessments, score history and entered values.\n"
+        "- **Patient Records & History**: each patient's saved assessments, score history and entered values, with "
+        "the test to ask for when a lab such as HbA1c was left blank.\n"
         "- **Medication Monitoring**: the medication plans you create and the patient's dose log.\n"
         "- **Prevention Plan**: targets you approve for an at-risk patient (weight, activity, fruit and vegetables, "
         "sleep, stopping smoking), their progress from the patient's tracker, and a re-check date.\n"
         "- **Clinical Insights**: a record-based pre-consultation summary, and an optional Gemini summary only with "
-        "the patient's permission.\n"
-        "- **Data Quality**: missing values, duplicates and upload issues to review."
+        "the patient's permission."
     ),
     "how do i use": (
         "1. **Clinical Dashboard**: upload a file of de-identified patient records, correct flagged values, score "
