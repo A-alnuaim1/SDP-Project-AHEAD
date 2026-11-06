@@ -149,6 +149,11 @@ def _attention_row(item: dict, today) -> None:
         target = "Patient Records & History" if item["flags"] else "Medication Monitoring"
         if st.button(f"Open {markdown_literal(first)}", key=f"home_open_{item['id']}", help=f"Opens {target} in Patient Intelligence"):
             _focus(target, item["id"])
+        # At risk with no urgent value: a prevention plan fits, so offer the shortcut to it. Urgent rows go to a visit first.
+        if item["flags"] and not item["urgent"] and st.button(
+                f"Plan for {markdown_literal(first)}", key=f"home_plan_{item['id']}",
+                help="Opens the Prevention Plan tab in Patient Intelligence"):
+            _focus("Prevention Plan", item["id"])
 
 
 def _calm_card(icon: str, title: str, text: str, kind: str = "") -> None:

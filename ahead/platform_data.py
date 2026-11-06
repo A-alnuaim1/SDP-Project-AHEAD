@@ -5,6 +5,8 @@ from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from ahead import prevention
+from ahead.config import DISEASES
 from ahead.storage import connection
 
 
@@ -81,11 +83,23 @@ def init_platform():
           values_json TEXT NOT NULL,score REAL NOT NULL,threshold REAL NOT NULL,
           model TEXT NOT NULL,source TEXT NOT NULL,created_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS record_predictions_owner ON record_predictions(owner_id,record_id,created_at);
+        -- screening_id has no foreign key: deleting a patient's screening history must not be blocked by a plan.
+        CREATE TABLE IF NOT EXISTS prevention_plans (
+          id INTEGER PRIMARY KEY,patient_id INTEGER NOT NULL REFERENCES users(id),
+          doctor_id INTEGER NOT NULL REFERENCES users(id),disease TEXT NOT NULL,screening_id INTEGER,
+          targets_json TEXT NOT NULL,note TEXT NOT NULL DEFAULT '',recheck_date TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','active','paused','stopped')),
+          started_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS prevention_patient ON prevention_plans(patient_id,doctor_id,status);
+        CREATE TABLE IF NOT EXISTS prevention_audit (
+          id INTEGER PRIMARY KEY,plan_id INTEGER NOT NULL REFERENCES prevention_plans(id),
+          doctor_id INTEGER NOT NULL REFERENCES users(id),action TEXT NOT NULL,details_json TEXT NOT NULL,created_at TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS prevention_audit_plan ON prevention_audit(plan_id,id);
         """)
         if 'ai_allowed' not in {r['name'] for r in db.execute('PRAGMA table_info(care_access)')}:
             db.execute('ALTER TABLE care_access ADD COLUMN ai_allowed INTEGER NOT NULL DEFAULT 0')
-        stopped=_stop_unlinked_plans(db)
-    _notify_unlinked(stopped)
+        stopped=_stop_unlinked_plans(db);stopped_prevention=_stop_unlinked_prevention(db)
+    _notify_unlinked(stopped);_notify_unlinked_prevention(stopped_prevention)
 
 
 def _stop_unlinked_plans(db, patient_id=None):
@@ -106,6 +120,25 @@ def _notify_unlinked(rows):
         notify(r['patient_id'],'medication','Medication plan stopped',f"{r['name']} was stopped because the prescribing doctor no longer has access. Talk to a clinician before changing how you take it.",'medications',f"plan-status-{r['id']}-stopped-unlinked")
 
 
+def _stop_unlinked_prevention(db, patient_id=None):
+    """Stop prevention plans (drafts included) whose doctor no longer has access; returns the ones the patient saw."""
+    rows=db.execute("""SELECT * FROM prevention_plans p WHERE status IN ('draft','active','paused') AND (? IS NULL OR patient_id=?)
+        AND NOT EXISTS(SELECT 1 FROM care_access a WHERE a.patient_id=p.patient_id AND a.doctor_id=p.doctor_id)""",(patient_id,patient_id)).fetchall()
+    stopped=[]
+    for r in rows:
+        stamp=now()
+        if db.execute("UPDATE prevention_plans SET status='stopped',updated_at=? WHERE id=? AND status=?",(stamp,r['id'],r['status'])).rowcount:
+            _prevention_audit(db,r['id'],r['doctor_id'],'discarded' if r['status']=='draft' else 'stopped',{'reason':'access removed'},stamp)
+            if r['status']!='draft':stopped.append(r)
+    return stopped
+
+
+def _notify_unlinked_prevention(rows):
+    for r in rows:
+        notify(r['patient_id'],'plan','Prevention plan stopped','Your prevention plan was stopped because the doctor who agreed it no longer has access. '
+               'Your tracker goals stay as they are.','medications',f"prevention-status-{r['id']}-stopped-unlinked")
+
+
 def event(patient_id, kind):
     with connection() as db:
         db.execute("INSERT INTO activity_events(patient_id,type,created_at) VALUES(?,?,?)", (patient_id,kind,now()))
@@ -123,8 +156,8 @@ def grant_doctor(patient_id, email):
 def revoke_doctor(patient_id, doctor_id):
     with connection() as db:
         db.execute("DELETE FROM care_access WHERE patient_id=? AND doctor_id=?",(patient_id,doctor_id))
-        stopped=_stop_unlinked_plans(db,patient_id)
-    _notify_unlinked(stopped)
+        stopped=_stop_unlinked_plans(db,patient_id);stopped_prevention=_stop_unlinked_prevention(db,patient_id)
+    _notify_unlinked(stopped);_notify_unlinked_prevention(stopped_prevention)
 
 
 def doctors_for(patient_id):
@@ -390,6 +423,281 @@ def open_doses(patient_id, start, end):
     """Unlogged doses still to act on; a paused or stopped plan's earlier doses stay in the history, not as a to-do."""
     active={p['id'] for p in plans(patient_id) if p['status']=='active'}
     return [d for d in scheduled_doses(patient_id,start,end) if d['plan_id'] in active and d['status'] in ('upcoming','missed')]
+
+
+# Prevention plans hold the doctor-approved targets of ahead/prevention.py. Per patient a doctor has at most one draft
+# (never shown to the patient) and one active-or-paused plan; every change is kept in prevention_audit.
+
+_PREVENTION_SELECT="SELECT p.*,u.name doctor_name FROM prevention_plans p JOIN users u ON u.id=p.doctor_id"
+
+
+def _prevention_audit(db, plan_id, doctor_id, action, details, stamp=None):
+    db.execute("INSERT INTO prevention_audit(plan_id,doctor_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+               (plan_id,doctor_id,action,json.dumps(details),stamp or now()))
+
+
+def _prevention_row(r):
+    """A stored plan with its targets decoded and start_date, the local day it was approved (None for a draft)."""
+    return {**dict(r),'targets':json.loads(r['targets_json']),
+            'start_date':to_local(r['started_at']).date().isoformat() if r['started_at'] else None}
+
+
+def _prevention_history(db, plan_id):
+    rows=[{'action':r['action'],'details':json.loads(r['details_json'] or '{}'),'created_at':r['created_at']}
+          for r in db.execute("SELECT action,details_json,created_at FROM prevention_audit WHERE plan_id=? ORDER BY id",(plan_id,))]
+    return [{**r,'text':prevention.history_text(r)} for r in rows]
+
+
+def _lifestyle_logs(db, patient_id, limit=365):
+    return [{'values':json.loads(r['values_json']),'created_at':r['created_at']} for r in db.execute(
+        "SELECT values_json,created_at FROM lifestyle WHERE patient_id=? ORDER BY created_at DESC,id DESC LIMIT ?",(patient_id,limit))]
+
+
+def _plan_details(values):
+    return {k:values[k] for k in ('disease','screening_id','targets','note','recheck_date')}
+
+
+def _offer_values(db, patient_id, disease, screening_id, edit):
+    """The screening inputs the offer rules read. A new plan or a draft: its source screening, which must be this
+    patient's own for this condition. An edit: the patient's newest screening for the condition (none: no values),
+    the result the doctor's tab builds its table from, so a re-screen (a patient who now smokes, a new BMI) can add a
+    target to an approved plan."""
+    if edit:
+        row=db.execute("SELECT values_json FROM screenings WHERE owner_id=? AND disease=? ORDER BY created_at DESC,id DESC LIMIT 1",
+                       (patient_id,disease)).fetchone()
+    elif screening_id is None:
+        return {}
+    else:
+        row=db.execute("SELECT disease,values_json FROM screenings WHERE id=? AND owner_id=?",(screening_id,patient_id)).fetchone()
+        if not row or row['disease']!=disease:
+            raise ValueError("Choose one of this patient's own screenings for this condition.")
+    return json.loads(row['values_json'] or '{}') if row else {}
+
+
+def _with_baselines(db, patient_id, values, kept=None, since=None):
+    """values with each target's baseline, refusing a target the catalog does not offer this patient (weight under
+    BMI 25, stop smoking for anyone but a current smoker, anything under 18). On an edit (kept: {key: stored target}),
+    a target the plan already had keeps its recorded baseline (and 'since') and stays allowed, so an edit never drops
+    it because the patient lost weight; a target the edit adds gets since (the edit's UTC stamp), the time its
+    progress counts from."""
+    screening=_offer_values(db,patient_id,values['disease'],values['screening_id'],kept is not None)
+    suggested={t['key']:t for t in prevention.template(values['disease'],screening,_lifestyle_logs(db,patient_id,1))}
+    targets=[]
+    for t in values['targets']:
+        if t['key'] in (kept or {}):
+            old=kept[t['key']]
+            targets.append({**t,'baseline':old.get('baseline'),**({'since':old['since']} if old.get('since') else {})});continue
+        s=suggested.get(t['key'])
+        if not s or not s['offered']:
+            detail=s['reason'].split(': ',1)[-1] if s and s['reason'] else 'not in this starting point'
+            raise ValueError(f"{prevention.TARGETS[t['key']].label} is not offered for this patient ({detail}).")
+        targets.append({**t,'baseline':s['baseline'],**({'since':since} if since else {})})
+    return {**values,'targets':targets}
+
+
+def _sync_goals(db, patient_id, targets):
+    """Write the plan's tracker goals over the patient's saved goals, leaving every other goal key as it was."""
+    goals=prevention.tracker_goals(targets)
+    if goals:
+        row=db.execute("SELECT goals_json FROM lifestyle_goals WHERE patient_id=?",(patient_id,)).fetchone()
+        db.execute("INSERT INTO lifestyle_goals VALUES(?,?,?) ON CONFLICT(patient_id) DO UPDATE SET goals_json=excluded.goals_json,updated_at=excluded.updated_at",
+                   (patient_id,json.dumps({**(json.loads(row['goals_json']) if row else {}),**goals}),now()))
+    return goals
+
+
+def _plan_fields(values):
+    return (values['disease'],values['screening_id'],json.dumps(values['targets']),values['note'],values['recheck_date'])
+
+
+def _own_draft(db, doctor_id, patient_id, plan_id):
+    row=db.execute("SELECT status FROM prevention_plans WHERE id=? AND patient_id=? AND doctor_id=?",(plan_id,patient_id,doctor_id)).fetchone()
+    if not row:
+        raise PermissionError('Only your own draft for this patient can be changed or approved.')
+    if row['status']!='draft':
+        raise ValueError('This plan is no longer a draft; edit the plan itself instead.')
+
+
+def save_prevention_draft(doctor_id, patient_id, plan, plan_id=None):
+    """Save the doctor's draft and return its id; the patient never sees a draft. Without plan_id the doctor's
+    existing draft for this patient is updated when there is one, so each doctor keeps one draft per patient."""
+    values=prevention.check_plan(plan,local_today())
+    with connection() as db:
+        if not _authorized_patient(db,doctor_id,patient_id):
+            raise PermissionError('Patient access has not been granted.')
+        if plan_id is None:
+            row=db.execute("SELECT id FROM prevention_plans WHERE patient_id=? AND doctor_id=? AND status='draft' ORDER BY id DESC",(patient_id,doctor_id)).fetchone()
+            plan_id=row['id'] if row else None
+        else:
+            _own_draft(db,doctor_id,patient_id,plan_id)
+        values=_with_baselines(db,patient_id,values)
+        stamp=now()
+        if plan_id is None:
+            plan_id=db.execute("""INSERT INTO prevention_plans(patient_id,doctor_id,disease,screening_id,targets_json,note,recheck_date,status,created_at,updated_at)
+                                  VALUES(?,?,?,?,?,?,?,'draft',?,?)""",(patient_id,doctor_id,*_plan_fields(values),stamp,stamp)).lastrowid
+            action='drafted'
+        else:
+            db.execute("UPDATE prevention_plans SET disease=?,screening_id=?,targets_json=?,note=?,recheck_date=?,updated_at=? WHERE id=?",
+                       (*_plan_fields(values),stamp,plan_id))
+            action='draft_edited'
+        _prevention_audit(db,plan_id,doctor_id,action,_plan_details(values),stamp)
+    return plan_id
+
+
+def approve_prevention_plan(doctor_id, patient_id, plan, plan_id=None):
+    """
+    Approve a plan (a new one, or the doctor's draft plan_id) and return its id. It becomes this doctor's one active
+    plan for the patient: their earlier active or paused plan stops and their other drafts are discarded, both kept in
+    the history. Baselines are the patient's latest tracker values now; the plan's goals are written to the tracker
+    goals (other goal keys untouched) and the patient is notified.
+    """
+    values=prevention.check_plan(plan,local_today())
+    with connection() as db:
+        if not _authorized_patient(db,doctor_id,patient_id):
+            raise PermissionError('Patient access has not been granted.')
+        if plan_id is not None:
+            _own_draft(db,doctor_id,patient_id,plan_id)
+        values=_with_baselines(db,patient_id,values)
+        stamp=now()
+        if plan_id is None:
+            plan_id=db.execute("""INSERT INTO prevention_plans(patient_id,doctor_id,disease,screening_id,targets_json,note,recheck_date,status,started_at,created_at,updated_at)
+                                  VALUES(?,?,?,?,?,?,?,'active',?,?,?)""",(patient_id,doctor_id,*_plan_fields(values),stamp,stamp,stamp)).lastrowid
+        else:
+            db.execute("UPDATE prevention_plans SET disease=?,screening_id=?,targets_json=?,note=?,recheck_date=?,status='active',started_at=?,updated_at=? WHERE id=?",
+                       (*_plan_fields(values),stamp,stamp,plan_id))
+        replaced=False
+        for r in db.execute("SELECT id,status FROM prevention_plans WHERE patient_id=? AND doctor_id=? AND id<>? AND status IN ('draft','active','paused')",
+                            (patient_id,doctor_id,plan_id)).fetchall():
+            db.execute("UPDATE prevention_plans SET status='stopped',updated_at=? WHERE id=?",(stamp,r['id']))
+            draft=r['status']=='draft';replaced|=not draft
+            _prevention_audit(db,r['id'],doctor_id,'discarded' if draft else 'stopped',
+                              {'reason':'another plan approved' if draft else 'replaced','plan_id':plan_id},stamp)
+        _prevention_audit(db,plan_id,doctor_id,'approved',_plan_details(values),stamp)
+        goals=_sync_goals(db,patient_id,values['targets'])
+    count=len(values['targets'])
+    notify(patient_id,'plan','New prevention plan',
+           f"Your doctor sent you a {DISEASES[values['disease']]['long_label']} prevention plan with {count} target{'s'*(count!=1)}."
+           +(' It replaces your earlier plan.' if replaced else '')+(' Your tracker goals now match it.' if goals else '')
+           +f" Re-check on {prevention.date_text(values['recheck_date'])}.",'medications',f'prevention-{plan_id}-approved')
+    return plan_id
+
+
+def update_prevention_plan(doctor_id, plan_id, plan):
+    """
+    Edit an active or paused plan's targets, note or re-check date (its condition and source screening stay); False,
+    with no history row or notification, when nothing changed. Kept targets keep their baselines; an added target is
+    checked against the patient's newest screening for the condition and counts its progress from this edit. The
+    earlier version stays in the history. An active plan's goals are written to the tracker again, and the patient is
+    notified.
+    """
+    when=plan.get('recheck_date')
+    with connection() as db:
+        row=db.execute("SELECT * FROM prevention_plans WHERE id=? AND doctor_id=?",(plan_id,doctor_id)).fetchone()
+        if not row or not _authorized_patient(db,doctor_id,row['patient_id']):
+            raise PermissionError('Plan access denied.')
+        if row['status']=='draft':
+            raise ValueError('This plan is still a draft; save the draft or approve it instead.')
+        if row['status']=='stopped':
+            raise ValueError('A stopped plan cannot be edited; approve a new plan instead.')
+        changed=(when.isoformat() if isinstance(when,date) else str(when))!=row['recheck_date']
+        values=prevention.check_plan({**plan,'disease':row['disease'],'screening_id':row['screening_id']},local_today(),changed)
+        before={'targets':json.loads(row['targets_json']),'note':row['note'],'recheck_date':row['recheck_date']}
+        stamp=now()
+        values=_with_baselines(db,row['patient_id'],values,{t['key']:t for t in before['targets']},stamp)
+        if all(values[k]==v for k,v in before.items()):
+            return False
+        db.execute("UPDATE prevention_plans SET targets_json=?,note=?,recheck_date=?,updated_at=? WHERE id=?",
+                   (json.dumps(values['targets']),values['note'],values['recheck_date'],stamp,plan_id))
+        _prevention_audit(db,plan_id,doctor_id,'edited',{**_plan_details(values),'before':before},stamp)
+        if row['status']=='active':
+            _sync_goals(db,row['patient_id'],values['targets'])
+    notify(row['patient_id'],'plan','Prevention plan updated','Your doctor updated your prevention plan. Open My plan to see the targets.',
+           'medications',f'prevention-{plan_id}-edited-{stamp}')
+    return True
+
+
+_PREVENTION_NOTES={
+    'paused':('Prevention plan paused','Your doctor paused your prevention plan. Your tracker goals stay as they are.'),
+    'active':('Prevention plan resumed','Your doctor resumed your prevention plan, and your tracker goals match it again.'),
+    'stopped':('Prevention plan stopped','Your doctor stopped your prevention plan. Your tracker goals stay as they are.'),
+}
+
+
+def prevention_plan_status(doctor_id, plan_id, status):
+    """Pause, resume ('active') or stop a plan; False, with no history row or notification, when it already has that
+    status. Stopping a draft discards it without telling the patient. Resuming writes the goals to the tracker again."""
+    if status not in ('active','paused','stopped'):
+        raise ValueError('Invalid plan status.')
+    with connection() as db:
+        row=db.execute("SELECT * FROM prevention_plans WHERE id=? AND doctor_id=?",(plan_id,doctor_id)).fetchone()
+        if not row or not _authorized_patient(db,doctor_id,row['patient_id']):
+            raise PermissionError('Plan access denied.')
+        if row['status']==status:
+            return False
+        if row['status']=='stopped':
+            raise ValueError('A stopped plan cannot be paused or resumed; approve a new plan instead.')
+        if row['status']=='draft' and status!='stopped':
+            raise ValueError('A draft cannot be paused or resumed; approve it to start it.')
+        stamp=now()
+        db.execute("UPDATE prevention_plans SET status=?,updated_at=? WHERE id=?",(status,stamp,plan_id))
+        _prevention_audit(db,plan_id,doctor_id,'discarded' if row['status']=='draft' else status,{},stamp)
+        if row['status']=='draft':
+            return True
+        if status=='active':
+            _sync_goals(db,row['patient_id'],json.loads(row['targets_json']))
+    notify(row['patient_id'],'plan',*_PREVENTION_NOTES[status],'medications',f'prevention-status-{plan_id}-{status}-{stamp}')
+    return True
+
+
+def prevention_plans(patient_id, doctor_id=None):
+    """
+    The patient's view (doctor_id None): active and paused plans from every doctor, newest approved first; never a
+    draft or a stopped plan. The doctor's view: only their own plans for this linked patient, drafts and stopped ones
+    included, current ones first, each with its 'history'. Rows add targets, start_date and doctor_name.
+    """
+    if doctor_id is not None and not allowed(doctor_id,patient_id):
+        raise PermissionError('Patient access denied.')
+    with connection() as db:
+        if doctor_id is None:
+            return [_prevention_row(r) for r in db.execute(
+                _PREVENTION_SELECT+" WHERE p.patient_id=? AND p.status IN ('active','paused') ORDER BY p.started_at DESC,p.id DESC",(patient_id,))]
+        rows=db.execute(_PREVENTION_SELECT+""" WHERE p.patient_id=? AND p.doctor_id=?
+            ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'paused' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,p.created_at DESC,p.id DESC""",
+            (patient_id,doctor_id)).fetchall()
+        return [{**_prevention_row(r),'history':_prevention_history(db,r['id'])} for r in rows]
+
+
+def prevention_history(doctor_id, plan_id):
+    """One of the doctor's plans' history, oldest first: [{'action', 'details', 'created_at', 'text'}]."""
+    with connection() as db:
+        row=db.execute("SELECT patient_id FROM prevention_plans WHERE id=? AND doctor_id=?",(plan_id,doctor_id)).fetchone()
+        if not row or not _authorized_patient(db,doctor_id,row['patient_id']):
+            raise PermissionError('Plan access denied.')
+        return _prevention_history(db,plan_id)
+
+
+def active_plan(patient_id):
+    """The prevention plan the patient's My plan page shows: the newest active one, else the newest paused one."""
+    current=prevention_plans(patient_id)
+    return next((p for p in current if p['status']=='active'),next(iter(current),None))
+
+
+def prevention_progress(patient_id, plan, doctor_id=None, today=None):
+    """prevention.progress() for a stored plan with the patient's tracker logs and 30x30 activity days; a doctor
+    (doctor_id) must still be linked."""
+    if doctor_id is not None and not allowed(doctor_id,patient_id):
+        raise PermissionError('Patient access denied.')
+    with connection() as db:
+        logs=_lifestyle_logs(db,patient_id)
+    return prevention.progress(plan,logs,challenge_days(patient_id),today or local_today())
+
+
+def notify_recheck_due(patient_id, today=None):
+    """Remind the patient, once per re-check date, to screen again when an active plan's re-check date has come."""
+    today=today or local_today()
+    for p in prevention_plans(patient_id):
+        if p['status']=='active' and p['recheck_date']<=today.isoformat():
+            notify(patient_id,'plan','Time to screen again',f"Your prevention plan's re-check date ({prevention.date_text(p['recheck_date'])}) has come. "
+                   'Screen again so you and your doctor can see how things have changed.','screenings',f"prevention-recheck-{p['id']}-{p['recheck_date']}")
 
 
 def patient_screenings(doctor_id, patient_id):

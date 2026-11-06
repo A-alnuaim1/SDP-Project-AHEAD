@@ -19,7 +19,7 @@ import streamlit as st
 
 from ahead.clinical_data import OPTIONAL_BLANK, input_bounds, shown_value
 from ahead.components import (
-    current_user, disclaimer, markdown_literal, model_label, model_selector, page_header, pref, record_screening,
+    current_user, disclaimer, go_to, markdown_literal, model_label, model_selector, page_header, pref, record_screening,
     result_card, section_heading, track_panel,
 )
 from ahead.config import (
@@ -31,7 +31,7 @@ from ahead.resources import (
     load_pipeline, missing_inputs_profile, validation_results,
 )
 from ahead.pages.settings import open_care_team
-from ahead.platform_data import doctors_for
+from ahead.platform_data import doctors_for, prevention_plans
 from ahead.reports import patient_report
 from ahead.theme import show_chart, style_figure, tokens
 from ahead.triage import track_text, triage
@@ -787,11 +787,37 @@ def share_with_doctor(key: str, not_saved: str = "") -> None:
             st.caption("No doctor can see your results yet. Add your doctor under Care team access in Settings.")
 
 
-def _track(result: dict, doctor: bool, key: str, not_saved: str = "") -> None:
-    """The result's track under the result card; a patient on the urgent or at-risk track also reads who can see it."""
+def plan_pointer(key: str, disease: str, not_saved: str = "") -> bool:
+    """
+    For a patient's at-risk result: when they already follow an active prevention plan for this condition, one line
+    pointing to My plan (with who can see the result) instead of the share step. Returns True when shown.
+    """
+    owner = (st.session_state.get("user") or {}).get("id")
+    plan = next((p for p in prevention_plans(owner) if p["status"] == "active" and p["disease"] == disease),
+                None) if owner else None
+    if not plan:
+        return False
+    name = markdown_literal(plan["doctor_name"])
+    line = f"You already follow a {DISEASES[disease]['long_label']} prevention plan with {name}"
+    if not_saved:
+        why, tell_them, _ = NOT_SAVED[not_saved]
+        line += f". {why}, so they can't see it in AHEAD. {tell_them}"
+    else:
+        line += ", who can see this result in AHEAD. Keep going with it on My plan."
+    with st.container(key=f"{key}_plan_row", horizontal=True, vertical_alignment="center"):
+        if st.button("Open My plan", key=f"{key}_plan", type="primary"):
+            go_to("medications")
+        st.caption(line)
+    return True
+
+
+def _track(result: dict, doctor: bool, key: str, not_saved: str = "", disease: str = "") -> None:
+    """The result's track under the result card; a patient on the urgent or at-risk track also reads who can see it,
+    or, at risk with an active prevention plan for this condition already, the line pointing to My plan."""
     track_panel(result, "doctor" if doctor else "patient")
     if not doctor and result["track"] in ("urgent", "at_risk"):
-        share_with_doctor(key, not_saved)
+        if not (result["track"] == "at_risk" and plan_pointer(key, disease, not_saved)):
+            share_with_doctor(key, not_saved)
 
 
 # =============================================================================
@@ -912,7 +938,7 @@ def render_predictor(disease: str) -> bool:
                    status="Flagged for review" if prediction else "Not flagged",
                    color="#C75D5D" if prediction else "#2E9477",
                    note=f"Classification threshold: {threshold * 100:g}%. This score is not a calibrated clinical probability.")
-    _track(track, doctor, f"{disease}_share", "" if result.get("saved", True) else "history_off")
+    _track(track, doctor, f"{disease}_share", "" if result.get("saved", True) else "history_off", disease)
     profile = result.get("profile")
     if profile:
         # Figures for this model with the same inputs blank, not the full-input ones.

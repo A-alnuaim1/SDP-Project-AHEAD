@@ -119,7 +119,8 @@ class DoctorHomeTests(unittest.TestCase):
         self.assertIn('Open overview',self.html(self.page(self.d)))
         cases={'doctor_patients':('Overview',None),'doctor_flagged':('Patient Records & History',amy['id']),
                'doctor_doses':('Medication Monitoring',ben['id']),'doctor_activity':('Overview',None),
-               f"home_open_{amy['id']}":('Patient Records & History',amy['id']),f"home_open_{ben['id']}":('Medication Monitoring',ben['id'])}
+               f"home_open_{amy['id']}":('Patient Records & History',amy['id']),f"home_open_{ben['id']}":('Medication Monitoring',ben['id']),
+               f"home_plan_{amy['id']}":('Prevention Plan',amy['id'])}
         for key,(tab,patient) in cases.items():
             with self.subTest(key=key):
                 self.assertEqual(self.click(key),{'tab':tab,'patient':patient})
@@ -128,7 +129,9 @@ class DoctorHomeTests(unittest.TestCase):
         for i in range(5):self.screening(self.patient(f'p{i}@test.com',f'Pat {i}'),.7)
         at=self.page(self.d)
         more=next(e for e in at.expander if e.label=='2 more patients')
-        self.assertEqual([b.key for b in more.button],[f"home_open_{amy['id']}",f"home_open_{ben['id']}"])
+        self.assertEqual([b.key for b in more.button if b.key.startswith('home_open_')],[f"home_open_{amy['id']}",f"home_open_{ben['id']}"])
+        # Only an at-risk row (no urgent value, not doses alone) offers the prevention-plan shortcut.
+        self.assertEqual([b.key for b in more.button if b.key.startswith('home_plan_')],[f"home_plan_{amy['id']}"])
         self.assertEqual(len([k for k in self.keys(at) if k and k.startswith('home_open_')]),7)
         self.assertIn('7 patients need a look today.',self.html(at))
         self.assertNotIn('home_attention_all',self.keys(at))

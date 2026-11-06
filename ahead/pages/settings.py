@@ -12,7 +12,7 @@ import streamlit as st
 from ahead.components import current_user, go_to, logout, markdown_literal, pref, page_header
 from ahead.theme import APPEARANCE_OPTIONS, appearance_mode
 from ahead.storage import change_password, delete_records, delete_screenings, update_profile, update_preferences
-from ahead.platform_data import doctors_for, grant_doctor, revoke_doctor, ai_consent, plans
+from ahead.platform_data import doctors_for, grant_doctor, revoke_doctor, ai_consent, plans, prevention_plans
 
 
 TABS = ["Profile", "Appearance", "Preferences", "Account"]
@@ -168,9 +168,11 @@ def _care_team(user: dict, focus: bool = False) -> None:
         st.checkbox('Allow sending my linked records to Gemini for optional AI summaries',value=bool(doctor['ai_allowed']),
              key=f"ai_consent_{doctor['id']}",on_change=lambda did=doctor['id']:ai_consent(user['id'],did,st.session_state[f'ai_consent_{did}']))
         ongoing=[p['name'] for p in plans(user['id']) if p['doctor_id']==doctor['id'] and p['status']!='stopped']
+        prevention=any(p['doctor_id']==doctor['id'] for p in prevention_plans(user['id']))
         with st.popover('Remove access',key=f"revoke_menu_{doctor['id']}"):
             st.write(f"{name} will no longer see your records or manage your medication.")
             if ongoing:st.warning('These plans will stop and cannot be restarted, even if you link this doctor again: '+', '.join(map(markdown_literal,ongoing))+'. Talk to a clinician before you stop a medicine.')
+            if prevention:st.warning(f'Your prevention plan with {name} will stop; your tracker goals stay as they are.')
             if st.button('Remove access',key=f"revoke_{doctor['id']}",type='primary'):
                 revoke_doctor(user['id'],doctor['id']);st.toast('Access removed.');st.rerun()
 

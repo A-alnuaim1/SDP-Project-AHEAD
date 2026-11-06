@@ -45,7 +45,8 @@ explanation.
 The patient navigation also includes **Health & Lifestyle Tracker** (transparent five-part lifestyle score,
 dated check-ins, trends, personal goals, manual 30×30 activity log), **Food Nutrition Analyzer**
 (photo preview, optional real Gemini image estimate, mandatory manual confirmation, meal history),
-**Medication Monitoring** (doctor-assigned plans and taken/skipped/unlogged dose tracking),
+**My plan** (the prevention plan a linked doctor approves, with progress from the tracker, plus
+doctor-assigned medicines and taken/skipped/unlogged dose tracking),
 **Notifications** (in-app reminders when the website is open), and an optional browser-speech **Voice Assistant**.
 Wellness is independent of the three disease models. Numeric wellness rules are educational heuristics, not
 validated clinical scales. A food photo is never analyzed without a configured Gemini key; manual entry

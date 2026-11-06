@@ -61,7 +61,8 @@
 .summary-icon img {width:21px;height:21px;}
 .summary-label {display:block;margin-top:12px;font-size:.84rem;font-weight:700;color:color-mix(in srgb,var(--tone) 55%,var(--ahead-title));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .summary-value {display:block;margin-top:2px;font-size:1.7rem;font-weight:760;line-height:1.2;color:var(--ahead-title);}
-.summary-value small {font-size:.8rem;font-weight:600;color:var(--ahead-muted);}
+/* the goal beside a figure ("/ 79 kg") is part of the fact, so body text: --ahead-muted is under 4.5:1 on tinted cards */
+.summary-value small {font-size:.8rem;font-weight:600;color:var(--ahead-text);}
 /* narrow cards (four across a narrow window) wrap the label and shrink the figure instead of cutting them off */
 [data-testid="stHtml"]:has(.summary-inner) {container:summary-card / inline-size;}
 @container summary-card (max-width:210px) {.summary-inner {padding:14px;}.summary-label {font-size:.78rem;white-space:normal;hyphens:auto;}.summary-value {font-size:clamp(1rem,12cqi,1.3rem);overflow-wrap:anywhere;}}
@@ -238,3 +239,81 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible 
 .track-pill.at-risk {--pill:var(--ahead-warning);}
 .track-pill.clear {--pill:var(--ahead-success);}
 @media (max-width:700px) {.track-panel {padding:14px;gap:12px;}}
+/* My plan (ahead/pages/medications.py). The hero keeps a brand gradient in both modes, like the home hero (white text
+   5.3:1 or more and #E6F4F6 5.2:1 or more on every stop and on its glass stats); every other piece tints tokens with a
+   palette tone, text 5.1:1 or more in light and dark (pills and labels mix their tone 55% with --ahead-title, body text
+   is --ahead-text, never --ahead-muted, which is under 4.5:1 on tinted cards) */
+.plan-hero {display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:18px 24px;margin:0 0 6px;padding:22px 26px;border-radius:22px;background:linear-gradient(125deg,#0D304B,#14556B 55%,#105E66);box-shadow:0 16px 40px #0B294222;color:#E6F4F6;}
+.plan-hero-main {flex:1 1 360px;min-width:0;display:flex;align-items:center;gap:18px;}
+.plan-ring {--share:0%;position:relative;flex:none;width:96px;height:96px;}
+.plan-ring::before {content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(color-mix(in srgb,var(--ahead-accent) 45%,#FFFFFF) var(--share),rgba(255,255,255,.18) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 11px),#000 calc(100% - 10px));mask:radial-gradient(farthest-side,transparent calc(100% - 11px),#000 calc(100% - 10px));}
+.plan-ring-center {position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;}
+.plan-ring-center strong {font-size:1.35rem;font-weight:800;color:#FFFFFF;}
+.plan-ring-center small {margin-top:4px;font-size:.66rem;font-weight:650;color:#E6F4F6;}
+.plan-ring-center img {width:30px;height:30px;}
+.plan-hero-text {min-width:0;}
+.plan-hero-title {font-size:1.22rem;font-weight:760;line-height:1.3;color:#FFFFFF;overflow-wrap:anywhere;}
+.plan-hero .plan-hero-text p {margin:4px 0 0;font-size:.9rem;line-height:1.55;color:#E6F4F6;}
+.plan-hero-badge {display:inline-block;margin-bottom:6px;padding:2px 10px;border-radius:999px;font-size:.72rem;font-weight:700;color:#FFFFFF;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.3);}
+.plan-hero-stats {display:flex;flex-wrap:wrap;gap:10px;}
+.plan-stat {min-width:118px;padding:10px 14px;border-radius:14px;font-size:.78rem;color:#E6F4F6;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.22);}
+.plan-stat strong {display:block;margin-top:2px;font-size:1.05rem;font-weight:760;color:#FFFFFF;}
+/* target cards: the dashboard summary card with a status pill beside the icon */
+.plan-card-head {display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;}
+.plan-status {--pill:var(--ahead-muted);display:inline-block;font-size:.72rem;font-weight:700;line-height:1.4;padding:2px 9px;border-radius:999px;white-space:nowrap;background:color-mix(in srgb,var(--pill) 14%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--pill) 34%,var(--ahead-card));color:color-mix(in srgb,var(--pill) 55%,var(--ahead-title));}
+.plan-card .summary-go {color:color-mix(in srgb,var(--tone) 55%,var(--ahead-title));}
+.plan-card .plan-status {white-space:normal;max-width:100%;}   /* a narrow card wraps "Checked at re-check" inside it */
+/* paused plan and the calm no-plan card */
+.plan-notice {--tone:#C98F1E;display:flex;align-items:center;gap:14px;margin:0 0 14px;padding:14px 18px;border-radius:16px;background:color-mix(in srgb,var(--tone) 8%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--tone) 28%,var(--ahead-card));border-inline-start:4px solid var(--tone);}
+.plan-notice.calm {--tone:#0E9AA7;}
+.plan-notice .summary-icon {flex:none;}
+.plan-notice strong {display:block;font-size:.95rem;font-weight:720;color:color-mix(in srgb,var(--tone) 55%,var(--ahead-title));}
+.plan-notice p {margin:2px 0 0;font-size:.84rem;line-height:1.55;color:var(--ahead-text);overflow-wrap:anywhere;}
+/* from your doctor: the note and the re-check card (amber once the date has come) */
+.plan-note {padding:14px 18px;border-radius:0 16px 16px 0;border-inline-start:4px solid var(--ahead-accent);background:color-mix(in srgb,var(--ahead-accent) 8%,var(--ahead-card));}
+.plan-note p {margin:0;font-size:.92rem;line-height:1.6;color:var(--ahead-text);overflow-wrap:anywhere;}
+.plan-note span {display:block;margin-top:6px;font-size:.8rem;font-weight:700;color:color-mix(in srgb,var(--ahead-accent) 55%,var(--ahead-title));overflow-wrap:anywhere;}
+.st-key-plan_recheck,.st-key-plan_recheck_due {margin-top:10px;padding:14px 18px!important;gap:10px 14px!important;border-radius:16px;background:var(--ahead-card);border:1px solid var(--ahead-border);}
+.st-key-plan_recheck_due {background:color-mix(in srgb,#C98F1E 8%,var(--ahead-card));border-color:color-mix(in srgb,#C98F1E 34%,var(--ahead-card));}
+.st-key-plan_recheck > [data-testid="stElementContainer"]:has(.plan-recheck),.st-key-plan_recheck_due > [data-testid="stElementContainer"]:has(.plan-recheck) {flex:1 1 220px!important;min-width:0!important;width:auto!important;}
+.plan-recheck strong {display:block;font-size:.98rem;font-weight:720;color:var(--ahead-title);}
+.plan-recheck span {display:block;margin-top:2px;font-size:.8rem;line-height:1.45;color:var(--ahead-text);}
+/* medicines today: one soft row per dose; the details take the free width and the buttons stay beside them */
+.st-key-plan_medicines {gap:8px!important;}
+[class*="st-key-dose_block_"] {gap:8px!important;padding:10px 14px!important;border-radius:14px;background:var(--ahead-card);border:1px solid var(--ahead-border);}
+[data-testid="stMain"] [class*="st-key-dose_block_"] [data-testid="stCaptionContainer"] p {color:var(--ahead-text);}   /* the missed-dose advice */
+[class*="st-key-dose_row_"] {gap:8px 10px!important;}
+[class*="st-key-dose_row_"] > [data-testid="stElementContainer"]:has(.dose-main) {flex:1 1 200px!important;min-width:0!important;width:auto!important;}
+[class*="st-key-dose_row_"] > [data-testid="stElementContainer"] {flex:none;width:auto!important;}
+[class*="st-key-dose_row_"] .stButton button {min-height:36px;padding:4px 16px;}
+.dose-main {display:flex;flex-direction:column;gap:2px;min-width:0;}
+.dose-main strong {font-size:.92rem;font-weight:720;color:var(--ahead-title);overflow-wrap:anywhere;}
+.dose-main span {font-size:.8rem;line-height:1.45;color:var(--ahead-text);overflow-wrap:anywhere;}
+@media (max-width:700px) {.plan-hero {padding:18px;}.plan-hero-main {flex-basis:100%;}.plan-ring {width:84px;height:84px;}}
+/* Prevention Plan tab (ahead/pages/doctor_intelligence.py): the targets table and the patient preview. A target that is
+   not offered dims only its disabled checkbox and goal; its reason and Now stay at full colour, and the table's captions
+   use --ahead-text (--ahead-muted is under 4.5:1 on the card) */
+.st-key-prevention_targets {gap:0!important;padding:6px 18px 10px!important;}
+.st-key-prevention_targets_head [data-testid="stCaptionContainer"] p {font-size:.68rem!important;font-weight:800;letter-spacing:.1em;text-transform:uppercase;}
+[data-testid="stMain"] .st-key-prevention_targets [data-testid="stCaptionContainer"] p {color:var(--ahead-text);}
+[class*="st-key-prevention_row_"] {padding:10px 0!important;border-top:1px solid var(--ahead-border);}
+[class*="st-key-prevention_row_off_"] :is([data-testid="stCheckbox"],[data-testid="stNumberInput"],[data-testid="stSlider"]) {opacity:.6;}
+.track-panel-title .track-pill {margin-inline-start:6px;vertical-align:1px;}
+.st-key-prevention_preview {border-style:dashed!important;}
+.plan-preview-title {font-weight:800;color:var(--ahead-title);overflow-wrap:anywhere;}
+.plan-preview-sub {font-size:.8rem;color:var(--ahead-text);}
+.plan-preview-item {--tone:#0E9AA7;margin-top:8px;padding:10px 12px;border-radius:12px;font-size:.84rem;line-height:1.45;color:var(--ahead-text);background:color-mix(in srgb,var(--tone) 8%,var(--ahead-card));border:1px solid color-mix(in srgb,var(--tone) 26%,var(--ahead-card));overflow-wrap:anywhere;}
+.plan-preview-item b {color:var(--ahead-title);}
+.plan-preview-note {margin:12px 0 0;padding:8px 12px;border-radius:0 12px 12px 0;border-inline-start:3px solid var(--ahead-accent);font-size:.82rem;line-height:1.55;color:var(--ahead-text);background:color-mix(in srgb,var(--ahead-accent) 8%,var(--ahead-card));overflow-wrap:anywhere;}
+.plan-preview-empty {margin:8px 0 0;font-size:.82rem;color:var(--ahead-text);}
+/* Below 700px a target row wraps: include and target on one line, Now and Goal side by side, then Why. The header row
+   is hidden, so the Now and Goal cells (keyed prevention_now_/prevention_goal_) name themselves */
+@media (max-width:700px) {
+  .st-key-prevention_targets_head {display:none!important;}
+  [class*="st-key-prevention_row_"] [data-testid="stColumn"]:has([data-testid="stCheckbox"]) {min-width:0!important;flex:0 0 auto!important;}
+  [class*="st-key-prevention_row_"] [data-testid="stColumn"]:has([class*="st-key-prevention_now_"],[class*="st-key-prevention_goal_"]) {min-width:0!important;flex:1 1 40%!important;}
+  :is([class*="st-key-prevention_now_"],[class*="st-key-prevention_goal_"]) {gap:4px!important;}
+  :is([class*="st-key-prevention_now_"],[class*="st-key-prevention_goal_"])::before {font-size:.68rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--ahead-text);}
+  [class*="st-key-prevention_now_"]::before {content:"Now";}
+  [class*="st-key-prevention_goal_"]::before {content:"Goal";}
+}

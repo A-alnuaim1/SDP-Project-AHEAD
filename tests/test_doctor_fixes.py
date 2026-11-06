@@ -375,8 +375,8 @@ class PatientIntelligenceTests(DoctorFixture):
     def test_data_quality_reports_success_only_after_checking_data(self):
         create_user('e@test.com','safe-password-123','Doctor','Dr Empty')
         at=self.page(authenticate('e@test.com','safe-password-123','Doctor'),'intelligence')
-        # The seventh info is the page's standing note about who appears here.
-        self.assertEqual((len(at.success),[i.value for i in at.info].count(NO_PATIENTS),len(at.info)),(0,6,7))
+        # One notice per tab (seven with Prevention Plan); the eighth info is the page's standing note about who appears here.
+        self.assertEqual((len(at.success),[i.value for i in at.info].count(NO_PATIENTS),len(at.info)),(0,7,8))
         at=self.page(self.d,'intelligence')
         self.assertEqual(len(at.success),0)
         self.assertTrue(any('nothing to check' in i.value for i in at.info))

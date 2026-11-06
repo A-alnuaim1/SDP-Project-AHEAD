@@ -43,7 +43,7 @@ SYSTEM_PROMPT = (
     "the result as an educational screening estimate, never a diagnosis. Answer questions about AHEAD, the "
     "three conditions, common screening measurements (HbA1c, blood glucose, BMI, blood pressure, eGFR, ACR, "
     "creatinine, BUN, hemoglobin), and how to use the website (Overview, Screenings, Health & Lifestyle Tracker, "
-    "Food Nutrition Analyzer, Medication Monitoring, Notifications, Data & Analytics, Settings, and for doctors the "
+    "Food Nutrition Analyzer, My plan, Notifications, Data & Analytics, Settings, and for doctors the "
     "Clinical Dashboard and Patient Intelligence). Users may speak their questions; their words arrive already "
     "transcribed, and your answer may be read aloud, so prefer plain sentences over tables. Always reply in English. "
     "Give general educational information only. Do not diagnose "
@@ -55,7 +55,7 @@ SYSTEM_PROMPT = (
 DOCTOR_SYSTEM_PROMPT = SYSTEM_PROMPT.rsplit("Keep answers", 1)[0] + (
     "The person asking is a signed-in clinician using a doctor account. Their menu has Overview, Screenings, "
     "Data & Analytics, Clinical Dashboard, Advanced Analytics & Patient Intelligence, AI Assistant and Settings; "
-    "the Health & Lifestyle Tracker, Food Nutrition Analyzer, Medication Monitoring and Notifications pages are for "
+    "the My plan, Health & Lifestyle Tracker, Food Nutrition Analyzer and Notifications pages are for "
     "patient accounts only, so do not send the clinician there. Patients link to a doctor themselves under "
     "Settings, Preferences, Care team access, by entering the doctor's account email. Patient Intelligence shows "
     "only linked patients: their saved assessments and score history, activity, medication plans the doctor creates "
@@ -133,6 +133,8 @@ DOCTOR_LOCAL_ANSWERS = {
         "- **Overview** and **Disease Analytics**: linked patients, saved assessments and recent activity.\n"
         "- **Patient Records & History**: each patient's saved assessments, score history and entered values.\n"
         "- **Medication Monitoring**: the medication plans you create and the patient's dose log.\n"
+        "- **Prevention Plan**: targets you approve for an at-risk patient (weight, activity, fruit and vegetables, "
+        "sleep, stopping smoking), their progress from the patient's tracker, and a re-check date.\n"
         "- **Clinical Insights**: a record-based pre-consultation summary, and an optional Gemini summary only with "
         "the patient's permission.\n"
         "- **Data Quality**: missing values, duplicates and upload issues to review."
@@ -163,7 +165,8 @@ PAGE_ALIASES = [
     ("screenings", ("screening", "screenings", "assessment", "assessments", "test", "tests")),
     ("wellness", ("lifestyle", "wellness", "health tracker", "tracker", "check-in", "check in")),
     ("food", ("food", "nutrition", "meal", "meals")),
-    ("medications", ("medication", "medications", "medicine", "medicines", "meds", "pills")),
+    ("medications", ("medication", "medications", "medicine", "medicines", "meds", "pills",
+                     "plan", "my plan", "prevention plan", "prevention plans")),
     ("notifications", ("notification", "notifications", "reminders")),
     ("analytics", ("analytics", "data", "datasets", "data and analytics", "data & analytics")),
     ("clinical", ("clinical dashboard", "clinical")),
@@ -220,7 +223,7 @@ def _status_answer(text: str, user_id: int) -> str | None:
         if not doses:
             return "You have no medication doses scheduled today."
         lines = [f"- {d['time']} · {d['name']} {d['dosage']} — {d['status']}" for d in sorted(doses, key=lambda d: d["time"])]
-        return "Here are today's doses:\n\n" + "\n".join(lines) + "\n\nYou can record them in **Medication Monitoring**."
+        return "Here are today's doses:\n\n" + "\n".join(lines) + "\n\nYou can record them on **My plan**."
     return None
 
 

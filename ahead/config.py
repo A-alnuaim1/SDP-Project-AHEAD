@@ -218,9 +218,10 @@ NAV_ITEMS = [
     # so every group heading appears once.
     ("overview",  "Overview",          "home.svg",      False),
     ("screenings", "Screenings",       "screenings.svg", False),
+    # The patient's prevention plan and medicines; the key stays 'medications' so older links and notifications work.
+    ("medications", "My plan",         "plan.svg", False),
     ("wellness", "Health & Lifestyle Tracker", "wellness.svg", False),
     ("food", "Food Nutrition Analyzer", "food.svg", False),
-    ("medications", "Medication Monitoring", "medications.svg", False),
     ("analytics", "Data & Analytics",  "analytics.svg", False),
     ("clinical",  "Clinical Dashboard", "clinical.svg", True),
     ("intelligence", "Advanced Analytics & Patient Intelligence", "intelligence.svg", True),

@@ -58,7 +58,7 @@ def render_patient_dashboard():
             'Review goals' if goal_count else 'Set goals'),
            ('challenge','Challenge days',challenge['completed'],30,'#C98F1E','wellness','Days with 30+ active minutes','Log activity'),
            ('doses','Doses today',len(due),None,'#C9706E','medications',
-            'Scheduled today, not yet logged' if due else 'All caught up for today','Medications')]
+            'Scheduled today, not yet logged' if due else 'All caught up for today','My plan')]
     for col,(icon,label,value,total,color,page,note,action) in zip(st.columns(4),cards):
         with col:
             if summary_card(f'dashboard_{icon}',label,value,note,action,color,icon,total):go_to(page)

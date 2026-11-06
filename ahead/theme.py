@@ -27,7 +27,7 @@ LIGHT = {
     "border": "#E1E8EF",
     "title": "#102A43",
     "text": "#344054",
-    "muted": "#6B7A90",
+    "muted": "#5F6E84",
     "accent": "#0E9AA7",
     "accent_strong": "#0B7F8B",
     "accent_soft": "#E6F6F7",

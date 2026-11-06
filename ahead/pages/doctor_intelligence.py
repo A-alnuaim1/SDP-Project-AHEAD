@@ -3,24 +3,27 @@ import json
 import re
 from collections import Counter
 from datetime import date,timedelta
+from html import escape
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from ahead import prevention as pv
 from ahead.clinical_data import issue_text
-from ahead.components import page_header,section_heading
+from ahead.components import TRACK_CLASS,markdown_literal,page_header,section_heading,track_pill_html
 from ahead.config import DISEASES,GENDER_CODED_FIELDS,OPTIONAL_INPUTS,model_label,pretty_label
-from ahead.platform_data import (activity_counts,ai_consent,analytics,clock_time,linked_patients,lifestyle_history,
-    patient_screenings,plan_status,plans,save_plan,scheduled_doses,local_today,to_local)
-from ahead.resources import gemini_available,chat_reply
+from ahead.platform_data import (activity_counts,ai_consent,analytics,approve_prevention_plan,clock_time,linked_patients,lifestyle_history,
+    patient_screenings,plan_status,plans,prevention_plan_status,prevention_plans,prevention_progress,save_plan,save_prevention_draft,
+    scheduled_doses,local_today,to_local,update_prevention_plan)
+from ahead.resources import gemini_available,chat_reply,icon_uri
 from ahead.storage import list_records
-from ahead.triage import LABELS,open_urgent,track_text,triage_saved
+from ahead.triage import LABELS,entered,open_urgent,rule_table,track_text,triage_saved
 from ahead.visuals import summary_tile
 from ahead.theme import style_figure,show_chart
 
-TABS=['Overview','Disease Analytics','Patient Records & History','Medication Monitoring','Clinical Insights','Data Quality']
-PICKERS=('records_patient','med_patient','insight_patient')
+TABS=['Overview','Disease Analytics','Patient Records & History','Medication Monitoring','Prevention Plan','Clinical Insights','Data Quality']
+PICKERS=('records_patient','med_patient','plan_patient','insight_patient')
 DAYS=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
 NO_PATIENTS='No patient accounts have linked to you yet. Ask a patient to add your email under Settings → Preferences → Care team access.'
 ACTIVITY={'login':'Sign-in','food_saved':'Meal saved','lifestyle_completed':'Lifestyle check-in','challenge_activity':'Activity challenge',
@@ -34,7 +37,11 @@ ACTIVITY_COLORS=dict(zip(ACTIVITY.values(),['#0E9AA7','#B5679B','#8E7CC3','#B782
 DOSE={'taken':'Taken','skipped':'Skipped','missed':'Missed (not logged)'}
 DOSE_COLORS=dict(zip(DOSE.values(),['#2E9477','#C9706E','#B7821E']))
 # Drawn as the design system's token-based pill (st.badge keeps Streamlit's light colours in AHEAD's dark mode).
-PLAN_STATUS={'active':('Active','#2E9477'),'paused':('Paused','#B7821E'),'stopped':('Stopped','#5B8FA3')}
+# Medication and prevention plans share them; only a prevention plan can be a draft.
+PLAN_STATUS={'active':('Active','#2E9477'),'paused':('Paused','#B7821E'),'stopped':('Stopped','#5B8FA3'),'draft':('Draft','#8E7CC3')}
+# The prevention strip's icon per track, as on the patient's own track panel.
+STRIP_ICON={'urgent':'flagged','at_risk':'scored','not_flagged':'review','no_score':'screenings'}
+NOTE_EXAMPLE='Small steps count: a 30-minute walk on most days is a great start.'
 # Stored upload issues read 'feature: message.' (ahead/clinical_data.validate_row); the first matching phrase names the kind.
 UPLOAD_ISSUES=(('conflicts with dob','Date of birth conflict'),('date of birth','Invalid date of birth'),('missing','Missing'),
                ('training range','Outside model range'))
@@ -253,11 +260,16 @@ def _plan_changed(plan_id,message):
     st.session_state.med_plan_pending=plan_id;st.session_state.med_plan_flash=message;st.rerun()
 
 
+def _status_pill(status):
+    label,tone=PLAN_STATUS[status]
+    return f'<span class="visual-badge" style="--visual-color:{tone}"><span style="color:{tone}" aria-hidden="true">●</span> {label}</span>'
+
+
 def _plan_actions(doctor_id,plan):
     """The plan's status as a pill, then only the changes that status allows. Stop is final, so it asks first."""
-    label,tone=PLAN_STATUS[plan['status']];change=None
+    change=None
     with st.container(horizontal=True,vertical_alignment='center'):
-        st.html(f'<span class="visual-badge" style="--visual-color:{tone}"><span style="color:{tone}" aria-hidden="true">●</span> {label}</span>',width='content')
+        st.html(_status_pill(plan['status']),width='content')
         for action,status,icon in {'active':[('Pause','paused',':material/pause_circle:')],'paused':[('Resume','active',':material/play_circle:')]}.get(plan['status'],[]):
             if st.button(action,key=f"{action}_{plan['id']}",icon=icon):change=status
         if plan['status']!='stopped':
@@ -334,6 +346,306 @@ def _medication(doctor_id):
             for d in sorted(past,key=lambda d:(d['date'],d['time']),reverse=True)]),hide_index=True,width='stretch',
             column_config={'Date':st.column_config.DateColumn(format='D MMM YYYY')})
     st.caption('Missed means a past dose with no log, which may reflect a missing entry rather than confirmed nonadherence.')
+
+
+# Prevention plans: ahead/prevention.py holds the target catalog and its rules, ahead/platform_data.py stores the plans
+# and checks the doctor is still linked on every read and write; this tab only gathers the doctor's choices.
+
+def _first(name):
+    """The patient's first name for labels and messages."""
+    return (name or '').split()[0] if (name or '').split() else 'the patient'
+
+
+def _prevention_changed(plan_id,message):
+    st.session_state.prevention_pending=plan_id;st.session_state.prevention_flash=message;st.rerun()
+
+
+def _suggested_condition(rows):
+    """A new plan starts from the newest condition whose latest result is at risk, else the newest screened one."""
+    latest={}
+    for r in rows:latest.setdefault(r['disease'],r)   # newest first
+    return next((d for d,r in latest.items() if _track(r)['track']=='at_risk'),next(iter(latest),'diabetes'))
+
+
+def _not_entered(disease,values):
+    """Urgent-rule values the screening left blank, so the urgent check could not use them ('HbA1c not entered')."""
+    labels=[r['label'] for r in rule_table(disease) if not r['flagged_only'] and r['feature'] in values and entered(values[r['feature']]) is None]
+    return [f'{label} not entered' for label in dict.fromkeys(labels)]
+
+
+def _strip_html(disease,latest,values,life):
+    """The condition's latest result as a track panel: its track pill, why a plan fits that track (an urgent result
+    needs a visit first, with its reasons), and the facts the targets depend on."""
+    facts=pv.facts(disease,values,life)+_not_entered(disease,values)
+    note=f'<p class="track-panel-note">{escape(" · ".join(facts))}</p>' if facts else ''
+    child=pv.child_age(disease,values,life) is not None   # no target is offered under 18, so the line says so
+    if latest is None:
+        track,css,style,pill,reasons='no_score','track-panel',' style="--tone:#5B8FA3"','',''
+        title=f'No saved {_label(disease)} screening yet'
+        summary=pv.FIT['child'] if child else 'A plan is optional; standard advice still applies.'
+    else:
+        result=_track(latest);track=result['track'];style=' style="--tone:#5B8FA3"' if track=='no_score' else ''
+        css=f"track-panel {TRACK_CLASS[track]}";pill=track_pill_html(result,'doctor')
+        title=f"{_label(disease)} · model score {latest['score']:.1%} · screened {_date(_day(latest['created_at']))}"
+        summary=pv.fit_text(result,child)
+        reasons=''.join(f"<li>{escape(r['doctor'])}</li>" for r in result['reasons'])
+        reasons=f'<ul class="track-panel-reasons">{reasons}</ul>' if reasons else ''
+    return (f'<div class="{css}"{style}><div class="summary-icon" aria-hidden="true"><img src="{icon_uri(f"dashboard/{STRIP_ICON[track]}.svg")}" alt=""></div>'
+            f'<div class="track-panel-body"><strong class="track-panel-title">{escape(title)} {pill}</strong>'
+            f'<p class="track-panel-summary">{escape(summary)}</p>{reasons}{note}</div></div>')
+
+
+def _plan_labels(current,draft,existing):
+    """The plan choices: the active or paused plan, then the draft (or New plan, since a doctor keeps one draft per
+    patient), then plans that were approved and later stopped. Discarded drafts were never sent, so they are left out."""
+    labels={}
+    if current:labels[current['id']]=f"{_label(current['disease'])} · {pv.STATUS_TEXT[current['status']]} · since {pv.date_text(current['start_date'])}"
+    if draft:labels[draft['id']]=f"Draft · {_label(draft['disease'])} · saved {pv.date_text(_day(draft['updated_at']))}"
+    else:labels[0]='New plan'+(' (replaces the current plan when approved)' if current else '')
+    for p in existing:
+        if p['status']=='stopped' and p['started_at']:
+            labels[p['id']]=f"{_label(p['disease'])} · Stopped · {pv.date_text(p['start_date'])} to {pv.date_text(_day(p['updated_at']))}"
+    return labels
+
+
+def _prevention_actions(doctor_id,plan,first,fallback):
+    """The plan's status pill and the changes it allows: pause or resume, and Stop behind a confirmation as on medication
+    plans; a draft can only be discarded. fallback is the plan to show after a discard."""
+    change=None;name=markdown_literal(first)
+    with st.container(horizontal=True,vertical_alignment='center'):
+        st.html(_status_pill(plan['status']),width='content')
+        if plan['status']=='active' and st.button('Pause',key=f"prevention_pause_{plan['id']}",icon=':material/pause_circle:'):change='paused'
+        if plan['status']=='paused' and st.button('Resume',key=f"prevention_resume_{plan['id']}",icon=':material/play_circle:'):change='active'
+        if plan['status'] in ('active','paused'):
+            # Keyed like the medication confirmation, so the stylesheet draws both the same way.
+            with st.popover('Stop',icon=':material/stop_circle:'),st.container(key=f"plan_stop_prevention_{plan['id']}"):
+                st.write(f'Stopping ends this plan for {name} straight away and notifies them; their tracker goals stay as they are. '
+                         'A stopped plan cannot be resumed; to agree new targets, approve a new plan.')
+                if st.button('Stop this plan',key=f"prevention_stop_{plan['id']}",type='primary'):change='stopped'
+        elif plan['status']=='draft':
+            with st.popover('Discard draft',icon=':material/delete:'),st.container(key=f"plan_stop_prevention_{plan['id']}"):
+                st.write(f'{name} never sees a draft. Discarding it cannot be undone; it stays only in your plan history.')
+                if st.button('Discard this draft',key=f"prevention_discard_{plan['id']}",type='primary'):change='stopped'
+    if change:
+        draft=plan['status']=='draft'
+        try:done=prevention_plan_status(doctor_id,plan['id'],change)
+        except (PermissionError,ValueError) as e:st.error(str(e));return
+        if draft:_prevention_changed(fallback,'Draft discarded.')
+        text={'paused':f'Plan paused; {name} was notified. Their tracker goals stay as they are.',
+              'active':f'Plan resumed; {name} was notified and their tracker goals match it again.',
+              'stopped':f'Plan stopped; {name} was notified.'}[change]
+        _prevention_changed(plan['id'],text if done else f"The plan is already {pv.STATUS_TEXT[change].lower()}.")
+
+
+def _progress_note(target):
+    """A progress tile's note in the doctor's words (prevention.progress words its notes for the patient)."""
+    if not target['tracked']:return 'Checked at the re-check'
+    if target['status']=='not_logged':return 'Not logged yet'+(' since the target started' if target['key']=='weight' else ' in the last 7 days')
+    return f"{target['status_text']} · {target['note']}"
+
+
+def _prevention_progress(doctor_id,patient_id,plan):
+    """Progress since approval, one tile per target, toned by its status (prevention.progress has the rules)."""
+    try:progress=prevention_progress(patient_id,plan,doctor_id)
+    except PermissionError:return
+    recheck=progress['recheck'];count=progress['tracked']
+    section_heading('Progress',' · '.join([f"Since {pv.date_text(plan['start_date'])}",
+        f"{progress['on_track']} of {count} tracked target{'s'*(count!=1)} on track" if count else 'Stop smoking is checked at the re-check',
+        *([f"{recheck['text']} ({recheck['date_text']})"] if recheck else [])]))
+    _tiles(f"prevention_progress_{plan['id']}",[(t['label'],f"{t['current_text']} {t['of_goal']}" if t['tracked'] else t['goal_text'],
+        _progress_note(t),t['tone'],t['icon']) for t in progress['targets']])
+    st.caption("Weight counts from the plan's start, or from the edit that added it. Activity is the last 7 days of the 30x30 activity log, or the latest "
+               'check-in’s weekly estimate. Fruit and vegetables and sleep are 7-day averages of tracker check-ins.')
+
+
+def _target_rows(disease,values,life,stored,kept):
+    """The targets table: the catalog template for this patient, with a saved plan's targets ticked and their goals
+    filled in. kept: an approved plan keeps a target the template no longer offers, with its recorded starting value,
+    as platform_data does; a draft is checked against the offer rules again when it is approved. 'start' is the
+    weight the why text and the preview measure from."""
+    rows=[]
+    for row in pv.template(disease,values,life):
+        saved=stored.get(row['key']);offered=row['offered'] or (saved is not None and kept)
+        rows.append({**row,'offered':offered,'enabled':(saved is not None and offered) if stored else row['enabled'],
+                     'goal':saved['goal'] if saved and saved.get('goal') is not None else row['goal'],
+                     'start':saved.get('baseline') if saved and kept else row['baseline'],
+                     'reason':'' if saved and offered else row['reason']})
+    return rows
+
+
+def _goal_input(prefix,row,disabled):
+    """The goal widget, inside the catalog bounds: a range slider for sleep, a number input otherwise, none for smoking."""
+    key,low,high,goal=row['key'],row['min'],row['max'],row['goal']
+    label=f"{row['label']} goal ({row['measure'].lower() if key!='weight' else 'kg'})";common=dict(key=f'{prefix}_{key}_goal',disabled=disabled,label_visibility='collapsed')
+    if row['kind']=='check':st.markdown('Stop' if row['offered'] else '—');return None
+    if row['kind']=='range':
+        value=tuple(min(max(float(x),low),high) for x in (goal or pv.TARGETS[key].default))
+        return list(st.slider(label,float(low),float(high),value,float(row['step']),format='%.1f h',**common))
+    if key=='weight':
+        return st.number_input(label,float(low),float(high),None if goal is None else min(max(float(goal),low),high),float(row['step']),
+                               format='%.1f',placeholder='Enter a goal',**common)
+    return st.number_input(label,int(low),int(high),int(min(max(goal if goal is not None else pv.TARGETS[key].default,low),high)),int(row['step']),**common)
+
+
+def _targets_table(prefix,disease,rows,ro):
+    """Include, target, now (the latest tracker log), goal and why, one row per catalog target. Returns the ticked
+    targets as the preview reads them: [{'key', 'goal', 'baseline'}]."""
+    widths=[.5,2.3,1.3,2.2,2.2];chosen=[]
+    with st.container(border=True,key='prevention_targets'):
+        with st.container(key='prevention_targets_head'):
+            for col,title in zip(st.columns(widths)[1:],['Target','Now','Goal','Why']):
+                with col:st.caption(title)
+        for row in rows:
+            key=row['key']
+            with st.container(key=f"prevention_row_{'' if row['offered'] else 'off_'}{key}"):
+                c=st.columns(widths,vertical_alignment='center')
+                # The offer is in the key: a checkbox keeps its state by key, so a ticked target that stops being offered
+                # while the tab is open (a new weight log puts the BMI under 25) would stay ticked yet locked.
+                on=c[0].checkbox(f"Include {row['label'].lower()}",value=row['enabled'],key=f"{prefix}_{key}_on_{int(row['offered'])}",
+                                 disabled=ro or not row['offered'],label_visibility='collapsed')
+                with c[1]:st.markdown(f"**{row['label']}**");st.caption(row['reason'] or row['measure'])
+                # Keyed so the stylesheet can label the Now and Goal cells when a narrow screen stacks the row under
+                # a hidden header row.
+                with c[2],st.container(key=f'prevention_now_{key}'):st.markdown(row['baseline_text'])
+                with c[3],st.container(key=f'prevention_goal_{key}'):goal=_goal_input(prefix,row,ro or not on)
+                # The weight reason says how far the goal is below the latest weight, so it follows the goal as it is edited.
+                c[4].caption(pv.why_text(disease,key,row['start'],goal) if key=='weight' else row['why'])
+            if on and row['offered']:chosen.append({'key':key,'goal':goal,'baseline':row['start']})
+    return chosen
+
+
+def _recheck(prefix,plan,ro):
+    """The re-check in weeks, and the date it gives: counted from today for a new plan or a draft (approving starts the
+    plan today), from the start date for an approved plan, whose saved date is kept while its weeks are unchanged."""
+    today=local_today();approved=plan is not None and plan['status']!='draft'
+    base=date.fromisoformat(plan['start_date']) if approved else today;low,high=pv.RECHECK_BOUNDS;saved=initial=None
+    if plan:
+        saved=date.fromisoformat(plan['recheck_date'])
+        initial=min(max(round((saved-(base if approved else _day(plan['updated_at']))).days/7),low),high)
+    weeks=st.number_input('Re-check (weeks)',low,high,initial or pv.RECHECK_WEEKS,1,key=f'{prefix}_weeks',disabled=ro)
+    when=saved if approved and weeks==initial else pv.recheck_date(weeks,base)
+    st.markdown(f'Screen again on **{pv.date_text(when)}**')
+    if approved and not ro and when<=today:st.caption('This re-check date has come. Choose more weeks to set a later one.')
+    return when
+
+
+def _preview_html(doctor,targets,note,start,recheck,status):
+    """The plan as the patient's My plan page lists it: one tinted line per target, the re-check and the note. doctor is
+    the account name as stored, which My plan prints as it is in its header and under the note (ahead/pages/medications.py)."""
+    items=''.join(f'<div class="plan-preview-item" style="--tone:{pv.TARGETS[t["key"]].color}"><b>{escape(pv.TARGETS[t["key"]].short)}</b> · '
+                  f'{escape(pv.summary_line(t).split(" · ",1)[1])}</div>' for t in targets) \
+        or '<p class="plan-preview-empty">Tick at least one target to build the plan.</p>'
+    sub=' · '.join([f'Agreed {pv.date_text(start)}',f'Re-check on {pv.date_text(recheck)}',*(['Paused by your doctor'] if status=='paused' else [])])
+    text=escape(note).replace('\n','<br>')   # line breaks kept, as My plan shows the note
+    quote=f'<blockquote class="plan-preview-note">“{text}” — {escape(doctor)}</blockquote>' if note else ''
+    return (f'<div class="plan-preview"><div class="plan-preview-title">Your plan with {escape(doctor)}</div>'
+            f'<div class="plan-preview-sub">{escape(sub)}</div>{items}{quote}</div>')
+
+
+def _edit_summary(details):
+    """What an edit changed, from the earlier version the history keeps: 'Activity 150 min → 180 min; note changed'."""
+    before=details.get('before') or {}
+    old,new=({t['key']:t.get('goal') for t in version.get('targets',[])} for version in (before,details))
+    parts=[]
+    for key,target in pv.TARGETS.items():
+        if key in new and key not in old:parts.append(f'{target.short} added')
+        elif key in old and key not in new:parts.append(f'{target.short} removed')
+        elif key in new and old[key]!=new[key]:parts.append(f'{target.short} {pv.goal_text(key,old[key],False)} → {pv.goal_text(key,new[key],False)}')
+    if before.get('note','')!=details.get('note',''):parts.append('note changed')
+    if before.get('recheck_date') and before['recheck_date']!=details.get('recheck_date'):parts.append(f"re-check {pv.date_text(details['recheck_date'])}")
+    return '; '.join(parts)
+
+
+def _plan_history(plan,earlier):
+    """The open plan's history, newest first, with what each edit changed; earlier counts the other stopped plans."""
+    with st.container(border=True,key='prevention_history'):
+        st.markdown('**Plan history**')
+        for entry in reversed(plan['history'] if plan else []):
+            change=_edit_summary(entry['details']) if entry['action']=='edited' else ''
+            st.caption(f"{_when(entry['created_at'])} · {entry['text']}"+(f': {change}' if change else ''))
+        if earlier:st.caption(f"{earlier} earlier plan{'s'*(earlier!=1)}, now stopped. Choose one under Prevention plan to read its history.")
+        elif not plan:st.caption('No earlier plans for this patient. Every change will be kept here.')
+
+
+@st.fragment
+def _prevention(doctor_id):
+    """
+    Agree a prevention plan with a linked patient: start from the standard advice for a condition, keep the targets that
+    fit, set goals, a re-check and a note, then approve it (the patient is notified and their tracker goals follow) or
+    save a draft the patient never sees. An approved plan shows its progress and can be edited, paused or stopped.
+    A fragment, so ticking a target or changing a goal redraws this tab and its preview, not every chart on the page.
+    """
+    patient=_patient_picker(doctor_id,'plan_patient')
+    if patient is None:return
+    patient_id,first=patient['id'],_first(patient['name']);name=markdown_literal(first)
+    try:existing=prevention_plans(patient_id,doctor_id);rows=patient_screenings(doctor_id,patient_id)
+    except PermissionError:st.info('That patient is no longer linked to you, so their records are not shown.');return
+    life=lifestyle_history(patient_id)
+    if flash:=st.session_state.pop('prevention_flash',None):st.success(flash)
+    current=next((p for p in existing if p['status'] in ('active','paused')),None)
+    draft=next((p for p in existing if p['status']=='draft'),None)
+    labels=_plan_labels(current,draft,existing);key=f'prevention_plan_{patient_id}'
+    # Options are plan ids, set before the widget exists; a first look opens the current plan, else the draft or New plan.
+    if (pending:=st.session_state.pop('prevention_pending',None)) is not None:st.session_state[key]=pending
+    if st.session_state.get(key) not in labels:st.session_state[key]=next(iter(labels))
+    selected=st.selectbox('Prevention plan',list(labels),format_func=labels.get,key=key) if len(labels)>1 else next(iter(labels))
+    plan=next((p for p in existing if p['id']==selected),None);status=plan['status'] if plan else 'new'
+    approved=status in ('active','paused','stopped');ro=status=='stopped'
+    if plan:_prevention_actions(doctor_id,plan,first,current['id'] if current else 0)
+    strip=st.container()   # filled once the starting point below names the condition
+    if status in ('active','paused'):_prevention_progress(doctor_id,patient_id,plan)
+    left,right=st.columns([1.65,1],gap='large')
+    with left:
+        head=st.container()
+        options=[plan['disease']] if approved else list(pv.STARTING_POINTS)
+        default=plan['disease'] if plan else _suggested_condition(rows)
+        disease=st.selectbox('Starting point',options,index=options.index(default),format_func=lambda d:pv.STARTING_POINTS[d].label,
+                             key=f'prevention_start_{patient_id}_{selected}_{approved}',disabled=approved)
+        st.caption(pv.starting_point(disease).advice)
+        latest=next((r for r in rows if r['disease']==disease),None)
+        values=json.loads(latest.get('values_json') or '{}') if latest else {}
+        with strip:st.html(_strip_html(disease,latest,values,life))
+        with head:section_heading('Targets',f"Start from standard advice for {DISEASES[disease]['long_label']} prevention, then adjust. The model does not choose these."
+                                  if not approved else 'Goals you agreed from standard advice. Kept targets keep their starting values; the model does not choose these.')
+        stored={t['key']:t for t in plan['targets']} if plan and plan['disease']==disease else {}
+        prefix=f'prevention_{patient_id}_{selected}_{disease}_{status}'
+        chosen=_targets_table(prefix,disease,_target_rows(disease,values,life,stored,approved),ro)
+        c1,c2=st.columns(2)
+        with c1,st.container(border=True):when=_recheck(prefix,plan,ro)
+        with c2,st.container(border=True):
+            note=st.text_area(f'Note for {name}',value=plan['note'] if plan else '',max_chars=pv.NOTE_LIMIT,height=100,
+                              placeholder=NOTE_EXAMPLE,key=f'{prefix}_note',disabled=ro)
+        # What platform_data stores: the key and the goal (none for stop smoking); it records the starting values itself.
+        targets=[{'key':t['key'],**({} if pv.TARGETS[t['key']].kind=='check' else {'goal':t['goal']})} for t in chosen]
+        if status in ('new','draft'):
+            with st.container(horizontal=True,vertical_alignment='center'):
+                send=st.button(f'Approve and send to {name}',type='primary',icon=':material/send:',key=f'prevention_approve_{patient_id}')
+                keep=st.button('Save draft',key=f'prevention_draft_{patient_id}')
+                st.caption(f'{name} is notified; you can pause or stop the plan later.'
+                           +(' Approving replaces the current plan, which stays in the history.' if current else ''))
+            if send or keep:
+                data={'disease':disease,'screening_id':latest['id'] if latest else None,'targets':targets,'note':note,'recheck_date':when}
+                try:saved=(approve_prevention_plan if send else save_prevention_draft)(doctor_id,patient_id,data,plan['id'] if plan else None)
+                except (PermissionError,ValueError) as e:st.error(str(e))
+                else:_prevention_changed(saved,f'Plan approved and sent to {name}.'+(' Their tracker goals now match it.' if pv.tracker_goals(targets) else '')
+                                         if send else f'Draft saved. {name} sees nothing until you approve it.')
+        elif status in ('active','paused'):
+            with st.container(horizontal=True,vertical_alignment='center'):
+                save=st.button(f'Save changes and notify {name}',type='primary',icon=':material/save:',key=f"prevention_save_{plan['id']}")
+                st.caption('Edits keep the earlier version in the plan history.'+(' A paused plan’s goals reach the tracker when you resume it.' if status=='paused' else ''))
+            if save:
+                try:changed=update_prevention_plan(doctor_id,plan['id'],{'targets':targets,'note':note,'recheck_date':when})
+                except (PermissionError,ValueError) as e:st.error(str(e))
+                else:
+                    if changed:_prevention_changed(plan['id'],f'Plan updated; {name} was notified.')
+                    else:st.info('No changes to save.')
+        else:st.caption('A stopped plan is read-only. Choose New plan to agree a new one; this one stays in the history.')
+    with right:
+        section_heading(f"What {first} {'saw' if ro else 'sees' if approved else 'will see'}",
+                        'This plan no longer shows on My plan.' if ro else f"On {first}'s My plan page and in the tracker goals.")
+        with st.container(border=True,key='prevention_preview'):
+            st.html(_preview_html(st.session_state.user.get('name') or '',chosen,note.strip(),date.fromisoformat(plan['start_date']) if approved else local_today(),when,status))
+        _plan_history(plan,sum(p['status']=='stopped' and bool(p['started_at']) and p['id']!=selected for p in existing))
 
 
 def _upload_issue(issue):
@@ -468,7 +780,7 @@ def _focus(doctor_id):
 def render_doctor_intelligence():
     if st.session_state.user.get('role')!='Doctor':st.error('Doctor access required.');return
     doctor=st.session_state.user['id']
-    page_header('Care team','Advanced Analytics & Patient Intelligence','Consent-linked patient histories, medication plans and data quality.')
+    page_header('Care team','Advanced Analytics & Patient Intelligence','Consent-linked patient histories, medication and prevention plans, and data quality.')
     st.info('Only patients who add your doctor email in their settings appear here. The separate Clinical Dashboard manages imported files.')
     tab,notice=_focus(doctor);slot=st.empty()
     if notice:slot.info(notice)
@@ -476,5 +788,5 @@ def render_doctor_intelligence():
     # tabs first appear (the doctor home always opens this page afresh) and keeps the open tab on later runs; the
     # slot above always holds one element so the tabs never move and remount on the next run.
     tabs=st.tabs(TABS,default=tab)
-    for tab,func in zip(tabs,[_overview,_disease,_records,_medication,_insights,_quality]):
+    for tab,func in zip(tabs,[_overview,_disease,_records,_medication,_prevention,_insights,_quality]):
         with tab:func(doctor)
