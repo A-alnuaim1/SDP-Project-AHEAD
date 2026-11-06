@@ -39,12 +39,14 @@ next(b for b in at.button if b.label=='Save lifestyle check-in').click().run()
 assert not at.exception
 assert len(__import__('ahead.platform_data',fromlist=['lifestyle_history']).lifestyle_history(p['id']))==before+1
 print('PASS lifestyle form save',flush=True)
-# Each model runs using its own feature defaults; render the complete saved result.
+# Each model runs on its form's typical answers (labs left blank: they are not model inputs); render the saved result.
 from ahead.resources import features,feature_summary,load_pipeline,best_model,decision_threshold,predict_probability
+from ahead.clinical_data import model_frame
+from ahead.config import OPTIONAL_INPUTS,form_fields
 for disease in ['diabetes','heart','kidney']:
     stats=feature_summary(disease)
-    values={f:(stats[f]['default'] if stats[f]['kind']=='category' else stats[f]['mode'] if stats[f]['binary'] else stats[f]['median']) for f in features(disease)}
-    pipeline=load_pipeline(disease,best_model(disease));prob=float(predict_probability(pipeline,__import__('pandas').DataFrame([values],columns=features(disease))).iloc[0]);threshold=decision_threshold(disease,best_model(disease))
+    values={f:(None if f in OPTIONAL_INPUTS.get(disease,[]) else stats[f]['default'] if stats[f]['kind']=='category' else stats[f]['mode'] if stats[f]['binary'] else stats[f]['median']) for f in form_fields(disease)}
+    pipeline=load_pipeline(disease,best_model(disease));prob=float(predict_probability(pipeline,model_frame(disease,[values],features(disease))).iloc[0]);threshold=decision_threshold(disease,best_model(disease))
     at=AppTest.from_file(os.path.abspath('app.py'),default_timeout=120)
     
     for key,value in {'authenticated':True,'user':p,'nav':'screenings','active_screening':disease,'last_results':{disease:{'values':values,'probability':prob,'prediction':int(prob>=threshold),'model':best_model(disease),'threshold':threshold}}}.items():at.session_state[key]=value

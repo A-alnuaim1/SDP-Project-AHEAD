@@ -139,7 +139,7 @@ class StripTests(Fixture):
         self.assertIn(pv.FIT['at_risk'], html)
         # The facts line, then the blank lab as its own line in the doctor home's words (triage.missing_tests).
         self.assertIn('<p class="track-panel-note">BMI 31.2 · former smoker</p>'
-                      '<p class="track-panel-note">HbA1c not entered · ask for an HbA1c test</p>', html)
+                      '<p class="track-panel-note">HbA1c not entered · ask for an HbA1c test to confirm</p>', html)
 
     def test_an_urgent_result_puts_a_visit_first_but_still_allows_a_plan(self):
         save_screening(self.p['id'], 'diabetes', 'GradientBoosting', .8, 1, .5, {**AT_RISK, 'HbA1c_level': 7.1})
@@ -165,6 +165,10 @@ class StripTests(Fixture):
         self.assertNotIn('not entered', html)
         self.assertTrue(all(self.widget(at, 'checkbox', label).disabled for label in INCLUDE.values()))
         self.assertIn(pv.CHILD_REASON, self.captions(at))
+        # Nothing can be approved, so neither button is offered as a dead end ("Choose at least one target.").
+        self.assertTrue(at.button(key=f"prevention_approve_{self.p['id']}").disabled)
+        self.assertTrue(at.button(key=f"prevention_draft_{self.p['id']}").disabled)
+        self.assertIn('No AHEAD plan is offered for this patient.', self.captions(at))
 
     def test_the_starting_point_picks_the_condition_and_a_missing_screening_is_said_plainly(self):
         at = self.page()
@@ -177,7 +181,8 @@ class StripTests(Fixture):
         self.assertIn(pv.why_text('kidney', 'fruit_veg'), self.captions(at))
         # A newer at-risk result for another condition is where a new plan starts.
         save_screening(self.p['id'], 'heart', 'LogisticRegression', .1, 0, .5, {})
-        save_screening(self.p['id'], 'kidney', 'RandomForest', .9, 1, .5, {'Age': 50, 'GFR': 90, 'ACR': 10, 'Smoking': 1})
+        # Saved by the retired kidney form; no urine ACR, so the model's flag stands (eGFR alone does not clear it).
+        save_screening(self.p['id'], 'kidney', 'RandomForest', .9, 1, .5, {'Age': 50, 'GFR': 90, 'Smoking': 1})
         at = self.page()
         self.assertEqual(self.widget(at, 'selectbox', 'Starting point').value, 'kidney')
         self.assertEqual((self.widget(at, 'checkbox', INCLUDE['smoking']).value, self.widget(at, 'checkbox', INCLUDE['smoking']).disabled), (True, False))

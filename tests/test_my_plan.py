@@ -26,7 +26,7 @@ from ahead.platform_data import (
     prevention_progress, save_lifestyle, save_plan, save_prevention_draft, scheduled_doses, set_challenge_day,
     set_goals, get_goals,
 )
-from ahead.resources import best_model, decision_threshold, feature_summary, features, icon_uri
+from ahead.resources import best_model, decision_threshold, feature_summary, icon_uri
 from ahead.storage import connection, init_db, load_screenings, save_screening
 from ahead.wellness import evaluate
 
@@ -565,9 +565,11 @@ class TrackerGoalsTests(MyPlanFixture):
 
 
 def typical(disease):
+    """The form's typical answers, optional labs and readings blank (the model alone sorts the result)."""
+    from ahead.config import OPTIONAL_INPUTS, form_fields
     stats = feature_summary(disease)
-    return {f: stats[f]["default"] if stats[f]["kind"] == "category" else stats[f]["mode"] if stats[f]["binary"]
-            else stats[f]["median"] for f in features(disease)}
+    return {f: None if f in OPTIONAL_INPUTS.get(disease, []) else stats[f]["default"] if stats[f]["kind"] == "category"
+            else stats[f]["mode"] if stats[f]["binary"] else stats[f]["median"] for f in form_fields(disease)}
 
 
 def scored(disease, probability, saved=True, **values):

@@ -16,7 +16,8 @@ from streamlit.testing.v1 import AppTest
 import ahead.pages.assistant as assistant
 import ahead.screening as screening
 from ahead.platform_data import grant_doctor, init_platform
-from ahead.resources import best_model, decision_threshold, feature_summary, features, missing_inputs_profile
+from ahead.config import OPTIONAL_INPUTS, form_fields, model_label
+from ahead.resources import best_model, decision_threshold, feature_summary
 from ahead.storage import authenticate, create_user, init_db, load_screenings
 
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
@@ -26,15 +27,17 @@ PATIENT_ELEVATED = ("The screening model identified a pattern associated with el
 # Screenings run by a doctor are not attached to a record, so the card speaks about the entered values.
 DOCTOR_ELEVATED = ("The entered values matched a pattern associated with elevated diabetes risk; this is not a "
                    "diagnosis and does not confirm that the patient has the condition.")
-SENSITIVITY = [("BMI", 35.0, 27.652077393512773, 0.031), ("Smoking", 1, 0, -0.012),
-               ("AlcoholConsumption", 9.95, 9.95150288308271, 0.0), ("GFR", 41.123456, 66.56, -0.00001)]
+# (model input, entered, typical, score change): the kidney model's inputs (config.MODEL_INPUTS).
+SENSITIVITY = [("bmi", 35.0, 27.86, 0.031), ("smoked_100", 1, 0, -0.012),
+               ("age", 48.0, 48.0001, 0.0), ("physically_active", 0, 1, -0.00001)]
 PATIENT_HEADER = "Personalize your experience, privacy and care team access."
 
 
 def typical(disease):
+    """The form's answers at the training median or mode, optional labs and readings left blank."""
     stats = feature_summary(disease)
-    return {f: stats[f]["default"] if stats[f]["kind"] == "category" else stats[f]["mode"] if stats[f]["binary"]
-            else stats[f]["median"] for f in features(disease)}
+    return {f: None if f in OPTIONAL_INPUTS.get(disease, []) else stats[f]["default"] if stats[f]["kind"] == "category"
+            else stats[f]["mode"] if stats[f]["binary"] else stats[f]["median"] for f in form_fields(disease)}
 
 
 def scored(disease, prediction, probability):
@@ -102,25 +105,27 @@ class DoctorWordingTests(unittest.TestCase):
         self.assertNotIn("this record", text.lower())   # the picker says these screenings are not attached to one
         self.assertIn('<div class="result-title">Flagged · elevated risk pattern</div>', "\n".join(h.proto.body for h in at.get("html")))
         # Models and model columns read as words, as in the queue and Patient Intelligence.
-        self.assertIn("Model: Gradient boosting ·", "\n".join(h.proto.body for h in at.get("html")))
-        self.assertTrue(any(i.value.startswith("Gradient boosting test-set precision") for i in at.info))
-        self.assertEqual(next(s for s in at.selectbox if s.label == "Prediction model").options[0], "Gradient boosting — Recommended")
+        named = model_label(best_model("diabetes"))
+        self.assertIn(f"Model: {named} ·", "\n".join(h.proto.body for h in at.get("html")))
+        self.assertTrue(any(i.value.startswith(f"{named} test-set precision") for i in at.info))
+        self.assertEqual(next(s for s in at.selectbox if s.label == "Prediction model").options[0], f"{named} — Recommended")
         bars = self.importance(at, "Diabetes")
-        self.assertIn("HbA1c Level (%)", bars)
-        self.assertTrue({"Gender: Female", "Smoking History: never"} & set(bars))
+        self.assertNotIn("HbA1c Level (%)", bars)   # labs are not model inputs
+        self.assertIn("Has Smoked (100+ Cigarettes)", bars)
+        self.assertTrue({"Gender: Female", "Gender: Male"} & set(bars))
         self.assertFalse([b for b in bars if "_" in b])
         # The history trend would join different people's screenings, so doctors get a note instead of the tab.
         self.assertEqual([t.label for t in at.tabs], ["Points to review", "Key factors", "AHEAD Insight", "Model information"])
         self.assertIn("No score history is shown for doctor accounts", text)
         self.assertEqual(len(at.subheader), 0)
 
-        lower_result = scored("kidney", 0, 0.1)   # the typical kidney row is urgent (ACR, HbA1c and FBS), so clear it
-        lower_result["kidney"]["values"].update(GFR=75, ACR=10, HbA1c=5.4, FastingBloodSugar=90)
+        lower_result = scored("kidney", 0, 0.1)   # kidney tests in the usual range: not flagged by the labs
+        lower_result["kidney"]["values"].update(egfr=75, uacr=10)
         lower = self.page(self.doctor, "screenings", active_screening="kidney", last_results=lower_result)
         text = self.text(lower)
         self.assertIn("This does not rule out disease or replace routine screening for the patient.", text)
         self.assertIn(screening.DOCTOR_NEXT_STEPS["kidney"][0][0][0], text)
-        self.assertIn("leave blank any others that are not available", text)
+        self.assertIn("leave blank any that are not available", text)
         self.assertNotIn("you don't have", text)
         self.assertEqual(self.links(lower), [])
 
@@ -146,27 +151,28 @@ class DoctorWordingTests(unittest.TestCase):
         # Rounded words and numbers; a row that only differs by rounding (9.95 vs 9.9515…) is left out.
         table = next(df.value for df in at.dataframe if "Typical value" in df.value.columns)
         self.assertEqual(list(table.columns), ["Input", "Entered", "Typical value", "Score change (points)"])
-        self.assertEqual(table.values.tolist(), [["Body Mass Index (BMI)", "35", "27.65", 3.1],
-                                                 ["Smoking", "Yes", "No", -1.2], ["Estimated GFR", "41.12", "66.56", 0.0]])
+        self.assertEqual(table.values.tolist(), [["Body Mass Index (BMI)", "35", "27.86", 3.1],
+                                                 ["Has Smoked (100+ Cigarettes)", "Yes", "No", -1.2],
+                                                 ["Physically Active", "No", "Yes", 0.0]])
         self.assertEqual(str(table["Score change (points)"].iloc[-1]), "0.0")   # never '-0.0'
         chart = next(json.loads(c.proto.spec) for c in at.get("plotly_chart") if "sensitivity" in c.proto.spec)
-        self.assertEqual(list(chart["data"][0]["y"]), ["Body Mass Index (BMI)", "Smoking", "Estimated GFR"])
+        self.assertEqual(list(chart["data"][0]["y"]), ["Body Mass Index (BMI)", "Has Smoked (100+ Cigarettes)",
+                                                       "Physically Active"])
         self.assertEqual(chart["data"][0]["marker"]["color"], ["#C9706E", "#5B8FA3", "#5B8FA3"])
         self.assertEqual(chart["layout"]["xaxis"]["title"]["text"], "Score change (points)")   # as the table column
         entered = next(df.value for df in at.dataframe if list(df.value.columns) == ["Input", "Value"]).set_index("Input")["Value"]
         stats = feature_summary("kidney")
-        self.assertEqual(entered["Gender"], ("Male", "Female")[int(stats["Gender"]["mode"])])
-        self.assertEqual((entered["Smoking"], entered["Presence of Edema"]), ("No", "No"))
-        self.assertEqual(entered["Body Mass Index (BMI)"], f"{stats['BMI']['median']:.2f}")
+        self.assertEqual(entered["Gender"], stats["gender"]["default"])
+        self.assertEqual((entered["Smoking History"], entered["Physically Active"], entered["History of Diabetes"]),
+                         ("Never", "Yes", "No"))
+        # Shown to two decimals at most, without trailing zeros (27.8, not 27.80).
+        self.assertEqual(entered["Body Mass Index (BMI)"], str(round(stats["bmi"]["median"], 2)).removesuffix(".0"))
         self.assertFalse([v for v in entered if re.fullmatch(r"[01]\.0|\d+\.\d{3,}", v)])
 
-        # An optional lab left blank says the model filled it in, as in Patient Intelligence.
-        result = scored("kidney", 1, 0.8)
-        result["kidney"]["values"] |= {"HemoglobinLevels": None}
-        result["kidney"]["missing"] = ["HemoglobinLevels"]
-        at = self.page(self.doctor, "screenings", active_screening="kidney", last_results=result)
+        # An optional lab left blank is simply not provided: labs are not model inputs, so nothing was filled in.
+        at = self.page(self.doctor, "screenings", active_screening="kidney", last_results=scored("kidney", 1, 0.8))
         entered = next(df.value for df in at.dataframe if list(df.value.columns) == ["Input", "Value"]).set_index("Input")["Value"]
-        self.assertEqual(entered["Hemoglobin Level"], "Not provided (the model used a typical value)")
+        self.assertEqual(entered["Urine ACR (mg/g)"], "Not provided")
         self.assertFalse([v for v in entered if v == "Not entered"])
         # Every remaining row reads the same once rounded: the doctor is told so, with no empty chart.
         with mock.patch.object(screening, "individual_sensitivity", return_value=SENSITIVITY[2:3]):
@@ -185,7 +191,7 @@ class DoctorWordingTests(unittest.TestCase):
         table = next(df.value for df in at.dataframe if "Comparison value" in df.value.columns)
         self.assertEqual(list(table.columns), ["Input", "Your value", "Comparison value", "Score change (percentage points)"])
         self.assertEqual(len(table), 4)
-        self.assertEqual(table["Comparison value"].iloc[0], "27.652077393512773")
+        self.assertEqual(table["Comparison value"].iloc[0], "27.86")
         chart = next(json.loads(c.proto.spec) for c in at.get("plotly_chart") if "sensitivity" in c.proto.spec)
         self.assertEqual(chart["data"][0]["marker"]["color"], ["#C9706E", "#5B8FA3", "#C9706E", "#5B8FA3"])
         self.assertTrue(any("Entered Value" in df.value.columns for df in at.dataframe))
@@ -196,8 +202,8 @@ class DoctorWordingTests(unittest.TestCase):
         self.assertEqual(next(s for s in at.selectbox if s.label == "Prediction model").options[0], f"{model} — Recommended")
         # The importance chart reads field labels for patients too, never column keys.
         bars = self.importance(at, "Kidney Health")
-        self.assertIn("Estimated GFR", bars)
-        self.assertNotIn("SerumCreatinine", bars)
+        self.assertIn("Body Mass Index (BMI)", bars)
+        self.assertFalse([b for b in bars if "_" in b])
         heart = self.page(self.patient, "screenings", active_screening="heart", last_results=scored("heart", 1, 0.8))
         bars = self.importance(heart, "Cardiovascular")
         self.assertTrue(any(re.fullmatch(r"(Age Category|History of \w+|Sex|General Health|Smoking Status): .+", b) for b in bars))
@@ -207,27 +213,24 @@ class DoctorWordingTests(unittest.TestCase):
         at = self.page(self.doctor, "screenings", active_screening="diabetes")
         next(b for b in at.button if b.label == "Generate Screening Result").click()
         text = self.text(self.ok(at.run()))
-        self.assertIn("HbA1c Level and Blood Glucose Level were left blank, so the model used typical values", text)
+        self.assertIn("HbA1c and blood glucose were left blank. The model does not read lab values", text)
         self.assertIn("repeat the screening with it when it is available", text)
         self.assertNotIn("You left", text)
         self.assertNotIn("when you have them", text)
         self.assertEqual(self.links(at), [])
         self.assertEqual(len(load_screenings(self.doctor["id"])), 1)   # still saved to the doctor's own account
 
-        values = typical("kidney") | {"GFR": None}
-        no_score = {"kidney": {"values": values, "no_score": True, "missing": ["GFR"], "model": best_model("kidney")}}
-        text = self.text(self.page(self.doctor, "screenings", active_screening="kidney", last_results=no_score))
-        self.assertIn("Estimated GFR was left blank.", text)
-        self.assertIn("the factors below come only from the entered values", text)
-        self.assertIn("Consider kidney-function assessment", text)
-        self.assertNotIn("What you can do next", text)
+        # A kidney screening without labs gets a score now (the model reads only answers); the note names the tests.
+        text = self.text(self.page(self.doctor, "screenings", active_screening="kidney",
+                                   last_results=scored("kidney", 1, 0.8)))
+        self.assertIn("Creatinine and eGFR, and urine ACR were left blank.", text)
+        self.assertIn("Blood pressure was not entered, so AHEAD could not check it.", text)
+        self.assertNotIn("You left", text)
         self.assertNotIn(CLINIC, text)
 
-        model = best_model("diabetes")
-        profile = missing_inputs_profile("diabetes", model, ["HbA1c_level"])
-        result = {"model": model, "missing": ["HbA1c_level"], "threshold": profile["threshold"], "profile": profile}
-        self.assertTrue(screening.missing_note("diabetes", result, doctor=True).startswith("HbA1c Level was left blank"))
-        self.assertTrue(screening.missing_note("diabetes", result).startswith("You left HbA1c Level blank"))
+        result = {"values": {"age": 50, "HbA1c_level": None, "blood_glucose_level": 120}}
+        self.assertTrue(screening.missing_note("diabetes", result, doctor=True).startswith("HbA1c was left blank."))
+        self.assertTrue(screening.missing_note("diabetes", result).startswith("You left HbA1c blank."))
 
     def test_patient_screening_wording_is_unchanged(self):
         at = self.page(self.patient, "screenings", active_screening="diabetes", last_results=scored("diabetes", 1, 0.8))
@@ -248,13 +251,10 @@ class DoctorWordingTests(unittest.TestCase):
         for doctor_copy in ("Points to review", "This record", "Red flags", "No score history"):
             self.assertNotIn(doctor_copy, text)
 
-        values = typical("kidney") | {"GFR": None}
-        no_score = {"kidney": {"values": values, "no_score": True, "missing": ["GFR"], "model": best_model("kidney")}}
-        at = self.page(self.patient, "screenings", active_screening="kidney", last_results=no_score)
+        at = self.page(self.patient, "screenings", active_screening="kidney", last_results=scored("kidney", 1, 0.8))
         text = self.text(at)
-        self.assertIn("You left Estimated GFR blank.", text)
-        self.assertIn("the factors below come only from your answers", text)
-        self.assertIn("What you can do next", text)
+        self.assertIn("You left creatinine and eGFR, and urine ACR blank.", text)
+        self.assertIn("You left blood pressure blank, so AHEAD could not check it.", text)
         self.assertEqual(self.links(at), [CLINIC])
 
     def test_screenings_picker_explains_doctor_results_are_not_linked_to_a_patient(self):

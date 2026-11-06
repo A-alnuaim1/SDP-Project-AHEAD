@@ -11,10 +11,10 @@ from html import escape
 
 import streamlit as st
 
-from ahead.config import DISCLAIMER_TEXT, DISEASES, ROLE_DOCTOR, ROLE_PATIENT, model_label
-from ahead.resources import available_models, best_model, decision_threshold, features, icon_uri, load_pipeline, model_reason
+from ahead.config import DISCLAIMER_TEXT, DISEASES, ROLE_DOCTOR, ROLE_PATIENT, form_fields, model_label
+from ahead.resources import available_models, best_model, decision_threshold, icon_uri, load_pipeline, model_reason
 from ahead.storage import save_screening
-from ahead.triage import track_text
+from ahead.triage import HISTORY, track_text
 
 
 # =============================================================================
@@ -176,7 +176,7 @@ def condition_cards(key_prefix: str, button_label: str = "Start screening", note
     ) + "</style>")
     columns = st.columns(3)
     for column, (disease, info) in zip(columns, DISEASES.items()):
-        count = len(features(disease))
+        count = len(form_fields(disease))   # the questions the form asks (labs included), not the model inputs
         meta = note or f"{count} questions · ~{max(2, round(count / 6))} min"
         with column, st.container(key=f"{key_prefix}_{disease}_condition_card"):
             st.html(
@@ -205,11 +205,43 @@ def stepper(active: int) -> None:
     st.html(f'<div class="stepper">{items}</div>')
 
 
+# The heart model's label is a past heart attack (BRFSS 2022), so its card says what the answers resemble, never a
+# future risk: (flagged, not flagged) per audience; the doctor texts start with the subject ("The entered values").
+HEART_RESULT_TEXT = {
+    "patient": ("Your answers are similar to those of people in a CDC health survey who said they had had a heart "
+                "attack. This is for early awareness and does not confirm that you have heart disease.",
+                "Your answers did not reach the model's level for being similar to people in a CDC health survey who "
+                "said they had had a heart attack. This does not rule out heart disease or replace routine check-ups."),
+    "doctor": ("{subject} resemble those of BRFSS 2022 respondents who reported a past myocardial infarction; this is "
+               "not a diagnosis and not a 10-year risk estimate.",
+               "{subject} did not reach the model's classification level for resembling BRFSS 2022 respondents who "
+               "reported a past myocardial infarction. This does not rule out cardiovascular disease."),
+}
+
+
+def model_overridden(track: dict | None) -> str:
+    """'history' when a reported past heart event sets the track (the score does not apply), 'lab' when a measured lab
+    value does, '' when the track follows the model's flag (or there is no track)."""
+    if not track:
+        return ""
+    if any(reason["kind"] == HISTORY for reason in track["reasons"]):
+        return "history"
+    if track.get("lab"):
+        return "lab"
+    # Urgent by a measured value (eGFR, ACR, HbA1c, glucose, blood pressure) that the model did not flag: the card
+    # must not read 'Lower Predicted Risk' over a 'See a doctor soon' panel.
+    return "lab" if track.get("urgent") and track.get("reasons") and track.get("flagged") is False else ""
+
+
 def result_card(prediction: int, probability: float, disease_label: str, model_name: str, threshold: float,
-                audience: str = "patient", subject: str = "This record's values", status: str = "") -> None:
+                audience: str = "patient", subject: str = "This record's values", status: str = "",
+                disease: str = "", track: dict | None = None) -> None:
     """The screening result box. audience="doctor" describes *subject* (the record, or values entered on
     Screenings) and the patient in the third person, titled Flagged / Not flagged like the rest of the doctor UI;
-    a record's *status* (e.g. Reviewed) replaces that word so the card agrees with the record label and queue."""
+    a record's *status* (e.g. Reviewed) replaces that word so the card agrees with the record label and queue.
+    *disease* (the condition key) gives the heart card its own words and says what its score means. *track* (the
+    result's triage()): when a measured lab value or a past heart event set it, the card is titled as the model's
+    estimate, so its flag never reads as the result over a track panel that says otherwise."""
     elevated = prediction == 1
     css = "result-elevated" if elevated else "result-lower"
     title = "Elevated Risk Pattern" if elevated else "Lower Predicted Risk"
@@ -232,6 +264,15 @@ def result_card(prediction: int, probability: float, disease_label: str, model_n
             else f"Your entered information did not meet the model's classification level for elevated "
             f"{disease_label} risk. This does not rule out disease or replace routine screening."
         )
+    if disease == "heart":
+        text = HEART_RESULT_TEXT[audience][0 if elevated else 1].format(subject=subject)
+    if model_overridden(track):
+        css = "result-neutral"   # the track panel below carries the result's colour
+        title = (f"{status or ('Flagged' if elevated else 'Not flagged')} · model estimate" if audience == "doctor"
+                 else "Model estimate")
+    meaning = DISEASES.get(disease, {}).get("score_note", {}).get(audience,
+                                                                  "The score is an algorithmic output, not a calibrated "
+                                                                  "clinical probability.")
     st.html(
         f"""
 <div class="result-card {css}">
@@ -240,7 +281,7 @@ def result_card(prediction: int, probability: float, disease_label: str, model_n
     <div class="result-score">Model screening score: <strong>{probability * 100:.1f}%</strong></div>
     <div class="result-text">{escape(text)}</div>
     <div class="result-meta">Model: {escape(model_name)} · Classification threshold: {threshold * 100:.0f}% ·
-    The score is an algorithmic output, not a calibrated clinical probability.</div>
+    {escape(meaning)}</div>
 </div>
 """
     )
@@ -336,8 +377,8 @@ def model_selector(disease: str, key: str, label: str = "Prediction model", blan
         reason = model_reason(disease)  # opens with the recommended model's class name
         st.write(reason.replace(recommended, shown(recommended), 1))
         st.caption(
-            "Alternative models are available for comparison and research. The recommended model "
-            "remains the default and is the only one with a tuned decision threshold"
+            "Alternative models are available for comparison and research, each at its own decision threshold "
+            "tuned on the validation set. The recommended model remains the default"
             + (" when every value is entered. If optional lab values are left blank, a model may use a lower "
                "threshold measured for that case." if blank_labs else ".")
         )

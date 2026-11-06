@@ -17,3 +17,6 @@ __pycache__/
 *.bak
 ahead.sqlite3
 ahead.sqlite3-*
+
+# raw CDC NHANES downloads (scripts/fetch_nhanes.py)
+data/nhanes/raw/

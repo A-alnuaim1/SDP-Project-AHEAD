@@ -15,7 +15,9 @@ import pickle
 import pandas as pd
 import streamlit as st
 
-from ahead.config import ASSETS_DIR, DATA_DIR, DISEASES, GEMINI_MODEL, GEMINI_FAST_MODEL, ICONS_DIR, MODELS_DIR
+from ahead.config import (
+    ASSETS_DIR, DATA_DIR, DISEASES, FORM_FIELD_SPECS, GEMINI_MODEL, GEMINI_FAST_MODEL, ICONS_DIR, MODELS_DIR, form_fields,
+)
 
 
 # =============================================================================
@@ -41,14 +43,21 @@ def load_dataset(disease: str) -> pd.DataFrame:
 def feature_summary(disease: str) -> dict:
     """
     Small per-feature statistics used to build the screening form, so the form
-    never has to touch the full dataset on a rerun:
+    never has to touch the full dataset on a rerun, for every model input and
+    every form field:
       categorical -> {"kind": "category", "options": [...], "default": mode}
       numeric     -> {"kind": "number", "min", "max", "median", "integer": bool,
                       "binary": bool, "mode": 0|1|None}
+    A form field that is not a column of the training file (a lab value, the
+    smoking answer the model reads as smoked_100) comes from config.FORM_FIELD_SPECS.
     """
     dataset = load_dataset(disease)
     summary = {}
-    for feature in features(disease):
+    specs = FORM_FIELD_SPECS.get(disease, {})
+    for feature in dict.fromkeys(features(disease) + form_fields(disease)):
+        if feature not in dataset.columns or feature in specs:
+            summary[feature] = dict(specs[feature])
+            continue
         series = dataset[feature].dropna()
         if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
             values = series.astype(str)
@@ -102,12 +111,32 @@ def final_metrics(disease: str) -> dict:
 
 def decision_threshold(disease: str, model_name: str | None = None) -> float:
     """
-    The tuned threshold only applies to the model it was tuned for.  Any other
-    benchmark model falls back to the conventional 0.5 cut-off.
+    The threshold *model_name* (default: the recommended model) flags at: each benchmark model's own threshold, tuned
+    on the validation set (train_model.py, model_thresholds). The models are trained without re-weighting, so a
+    conventional 0.5 cut-off would flag almost no one.
     """
-    if model_name is not None and model_name != best_model(disease):
-        return 0.5
-    return float(meta(disease).get("decision_threshold", 0.5))
+    info = meta(disease)
+    return float(info.get("model_thresholds", {}).get(model_name or best_model(disease),
+                                                      info.get("decision_threshold", 0.5)))
+
+
+def model_test_metrics(disease: str, model_name: str) -> dict:
+    """*model_name*'s held-out test-set metrics at its own tuned threshold, with that 'threshold' (empty when it was not
+    benchmarked). The recommended model's row holds the same figures as final_metrics."""
+    row = next((row for row in meta(disease).get("test_model_results", []) if row["model"] == model_name), None)
+    if row is None:
+        return final_metrics(disease) if model_name == best_model(disease) else {}
+    return row
+
+
+def same_series(a: dict, b: dict) -> bool:
+    """
+    Whether two saved screenings' scores can be compared: the same condition and model, and the same saved threshold.
+    Retraining gives a model a new tuned threshold (the NHANES-trained models share none with the retired ones), so a
+    score from a retired model of the same name is never compared with a current one.
+    """
+    return (a["disease"] == b["disease"] and a["model"] == b["model"]
+            and abs(float(a["threshold"]) - float(b["threshold"])) < 1e-9)
 
 
 @st.cache_data(show_spinner=False)
@@ -137,8 +166,13 @@ def model_reason(disease: str) -> str:
     name = info["best_model"]
     metric = info.get("selection_metric", "macro_f1")
     score = info.get("best_validation_score", 0)
-    pretty = {"macro_f1": "macro-F1", "f2_disease": "F2 score"}.get(metric, metric)
+    pretty = {"macro_f1": "macro-F1", "f2_disease": "F2 score", "roc_auc": "ROC AUC"}.get(metric, metric)
     families = len(info.get("validation_model_results", [])) or "the"
+    if info.get("selection_rule"):   # train_model.py writes the rule it used, which may prefer a simpler model
+        return (f"{name} is recommended under AHEAD's selection rule, compared across {families} model families on "
+                f"the validation set: {info['selection_rule']} Its validation {pretty} is {score:.3f}"
+                + (f" ({info['logistic_auc_gap']:.3f} below the best family)" if info.get("logistic_auc_gap") else "")
+                + f", and its threshold is {info.get('decision_threshold', 0.5):.2f}.")
     reason = (
         f"{name} is recommended because it achieved the strongest validation "
         f"{pretty} ({score:.3f}) among the {families} model families benchmarked on the "

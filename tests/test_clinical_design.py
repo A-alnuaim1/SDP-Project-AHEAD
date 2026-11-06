@@ -18,9 +18,10 @@ import streamlit
 from streamlit.testing.v1 import AppTest
 
 import ahead.pages.clinical as clinical
-from ahead.clinical_data import OPTIONAL_BLANK, issue_text, prepare_upload, shown_value, validate_row
+from ahead.clinical_data import OPTIONAL_BLANK, field_info, issue_text, prepare_upload, shown_value, validate_row
 from ahead.platform_data import append_record_prediction, init_platform, to_local
-from ahead.resources import best_model, feature_summary, features, icon_uri
+from ahead.config import AGE_FIELD, OPTIONAL_INPUTS, form_fields, model_label
+from ahead.resources import best_model, feature_summary, icon_uri
 from ahead.storage import (authenticate, connection, create_user, init_db, insert_records, list_records, save_scoring_run,
                            update_record)
 
@@ -32,9 +33,11 @@ PATIENT_LOWER = ("Your entered information did not meet the model&#x27;s classif
 
 
 def typical_row(disease, **changes):
-    stats, age_key = feature_summary(disease), "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
-    row = {f: stats[f]["default"] if stats[f]["kind"] == "category" else stats[f]["mode"] if stats[f]["binary"]
-           else round(stats[f]["median"], 2) for f in features(disease) if f != age_key}
+    """An upload row: every form column at its typical value, the optional labs and readings blank (the model alone
+    sorts it), age from the DOB."""
+    stats, age_key, optional = feature_summary(disease), AGE_FIELD[disease], OPTIONAL_INPUTS.get(disease, [])
+    row = {f: "" if f in optional else stats[f]["default"] if stats[f]["kind"] == "category" else stats[f]["mode"]
+           if stats[f]["binary"] else round(stats[f]["median"], 2) for f in form_fields(disease) if f != age_key}
     return {"PatientID": "DEMO-001", "DOB": "1980-01-01", **row, **changes}
 
 
@@ -90,7 +93,7 @@ class ClinicalDesignTests(unittest.TestCase):
 
     def upload(self, disease, rows, cohort="cohort", source_name=None):
         frame = pd.DataFrame(rows).astype(str)
-        insert_records(self.doctor["id"], cohort, disease, prepare_upload(frame, disease, features(disease),
+        insert_records(self.doctor["id"], cohort, disease, prepare_upload(frame, disease, form_fields(disease),
                        feature_summary(disease), ["PatientID"]), source_name=source_name)
         return sorted((r for r in list_records(self.doctor["id"], disease) if r["cohort"] == cohort),
                       key=lambda r: r["source_row"])
@@ -116,7 +119,7 @@ class ClinicalDesignTests(unittest.TestCase):
         self.assertIn('<div class="result-title">Flagged · elevated risk pattern</div>', html)
         self.assertNotIn("Elevated Risk Pattern", html)
         self.assertIn("Row 1 · HIGH · Flagged", self.widget(at.selectbox, "Record").options)
-        self.assertIn("Model: Gradient boosting ·", html)   # the model by name, as in Patient Intelligence
+        self.assertIn(f"Model: {model_label(best_model('diabetes'))} ·", html)   # by name, as in Patient Intelligence
         # The risk factors read as the same chips as the Screenings Key factors tab.
         self.assertIn("Risk factors in this record", [c.value for c in at.caption])
         self.assertIn('<span class="factor-chip">Higher BMI</span>', html)
@@ -146,76 +149,82 @@ class ClinicalDesignTests(unittest.TestCase):
 
     def test_values_read_like_the_patient_form(self):
         stats = feature_summary("kidney")
-        self.assertEqual([shown_value("Gender", v, stats["Gender"]) for v in (0, 1, 1.0)], ["Male", "Female", "Female"])
-        self.assertEqual([shown_value("Smoking", v, stats["Smoking"]) for v in (0, 1)], ["No", "Yes"])
-        self.assertEqual(shown_value("BMI", 27.652077393512773, stats["BMI"]), "27.65")
-        self.assertEqual(shown_value("BMI", -0.0001, stats["BMI"]), "0")
-        self.assertEqual(shown_value("SystolicBP", 140, stats["SystolicBP"]), "140")
-        self.assertEqual(shown_value("SystolicBP", 100.0, stats["SystolicBP"]), "100")
-        self.assertEqual([shown_value("BMI", v, stats["BMI"]) for v in (None, "", float("nan"))], ["Not provided"] * 3)
-        self.assertEqual(shown_value("GFR", None, stats["GFR"], OPTIONAL_BLANK),
-                         "Not provided (the model used a typical value)")
-        self.assertEqual(shown_value("BMI", "abc", stats["BMI"]), "abc")  # a failed entry stays as typed
+        self.assertEqual([shown_value("gender", v, stats["gender"]) for v in ("Male", "female", "FEMALE")],
+                         ["Male", "Female", "Female"])
+        self.assertEqual([shown_value("hypertension", v, stats["hypertension"]) for v in (0, 1)], ["No", "Yes"])
+        self.assertEqual(shown_value("bmi", 27.652077393512773, stats["bmi"]), "27.65")
+        self.assertEqual(shown_value("bmi", -0.0001, stats["bmi"]), "0")
+        self.assertEqual(shown_value("systolic_bp", 140, stats["systolic_bp"]), "140")
+        self.assertEqual(shown_value("systolic_bp", 100.0, stats["systolic_bp"]), "100")
+        self.assertEqual([shown_value("bmi", v, stats["bmi"]) for v in (None, "", float("nan"))], ["Not provided"] * 3)
+        # An optional lab is not a model input, so a blank one is simply not provided.
+        self.assertEqual(shown_value("egfr", None, stats["egfr"], OPTIONAL_BLANK), "Not provided")
+        self.assertEqual(shown_value("bmi", "abc", stats["bmi"]), "abc")  # a failed entry stays as typed
+        # An older saved record's keys (the retired kidney form) still read as words.
+        self.assertEqual([shown_value("Gender", v, field_info(stats, "Gender")) for v in (0, 1, 1.0)],
+                         ["Male", "Female", "Female"])
+        self.assertEqual([shown_value("Smoking", v, field_info(stats, "Smoking")) for v in (0, 1)], ["No", "Yes"])
         diabetes = feature_summary("diabetes")
         self.assertEqual([shown_value("smoking_history", v, diabetes["smoking_history"]) for v in ("No Info", "never", "not current")],
                          ["No info", "Never", "Not current"])
         self.assertEqual(shown_value("gender", "M", diabetes["gender"]), "M")
         # The value table and the sensitivity table on the page.
-        record = self.upload("kidney", [typical_row("kidney", Gender="1", Smoking="0", BMI="34.987654", GFR="41.123456",
-                                                    SystolicBP="152")])[0]
-        values = json.loads(record["values_json"]) | {"BMI": 27.652077393512773}
+        record = self.upload("kidney", [typical_row("kidney", gender="Female", physically_active="0", bmi="34.987654",
+                                                    egfr="41.123456", systolic_bp="152")])[0]
+        values = json.loads(record["values_json"]) | {"bmi": 27.652077393512773}
         update_record(self.doctor["id"], record["id"], values_json=json.dumps(values))
         self.score(record, 0.7, disease="kidney")
         # A rounded entry that reads the same as the typical value (27.65 vs 27.652…) is left out of the table.
-        drift = [("GFR", values["GFR"], stats["GFR"]["median"], -0.0001), ("Gender", 1, 0, 0.012),
-                 ("BMI", values["BMI"], 27.65, 0.0)]
+        drift = [("age", 61, 48, -0.0001), ("physically_active", 0, 1, 0.012), ("bmi", values["bmi"], 27.65, 0.0)]
         with mock.patch.object(clinical, "individual_sensitivity", return_value=drift), \
                 self.assertNoLogs("streamlit.dataframe_util", "INFO"):  # every table serialises without Arrow fallbacks
             at = self.page("kidney")
         table = self.frame(at, "Value")
         shown = dict(zip(table["Input"], table["Value"]))
-        self.assertEqual((shown["Gender"], shown["Smoking"], shown["Body Mass Index (BMI)"], shown["Estimated GFR"]),
+        self.assertEqual((shown["Gender"], shown["Physically Active"], shown["Body Mass Index (BMI)"], shown["eGFR"]),
                          ("Female", "No", "27.65", "41.12"))
         self.assertFalse([v for v in table["Value"] if re.search(r"\d\.\d{3,}", v)])
         sensitivity = self.frame(at, "Typical value")
-        self.assertEqual(list(sensitivity["Input"]), ["Estimated GFR", "Gender"])
-        self.assertEqual(list(sensitivity["Entered"]), ["41.12", "Female"])
-        self.assertEqual(list(sensitivity["Typical value"]), [f"{stats['GFR']['median']:.2f}", "Male"])
+        self.assertEqual(list(sensitivity["Input"]), ["Age", "Physically Active"])
+        self.assertEqual(list(sensitivity["Entered"]), ["61", "No"])
+        self.assertEqual(list(sensitivity["Typical value"]), ["48", "Yes"])
         change = sensitivity["Score change (points)"].iloc[0]
         self.assertEqual((change, math.copysign(1, change)), (0.0, 1.0))  # never '-0.0'
 
     def test_binary_inputs_are_edited_as_words_and_saved_as_codes(self):
-        record = self.upload("kidney", [typical_row("kidney", Gender="1", Smoking="0", SystolicBP="")])[0]
+        record = self.upload("kidney", [typical_row("kidney", physically_active="1", hypertension="0", bmi="")])[0]
         self.assertEqual(record["status"], "Incomplete")
         real = streamlit.data_editor
 
         def fill(data, *args, **kwargs):
             table = real(data, *args, **kwargs).copy()
-            table.loc[table["Input"] == "SystolicBP", "Value"] = "120"
+            table.loc[table["Input"] == "bmi", "Value"] = "27.5"
             return table
         with self.assertNoLogs("streamlit.dataframe_util", "INFO"):
             at = self.page("kidney")
         editor = next(d.value for d in at.dataframe if (d.key or "").startswith("record_editor_"))
         rows = editor.set_index("Input")
-        self.assertEqual((rows.loc["Gender", "Value"], rows.loc["Smoking", "Value"]), ("Female", "No"))
-        self.assertEqual(rows.loc["SystolicBP", "Field"], "Systolic Blood Pressure (mmHg)")
+        self.assertEqual((rows.loc["physically_active", "Value"], rows.loc["hypertension", "Value"]), ("Yes", "No"))
+        self.assertEqual(rows.loc["bmi", "Field"], "Body Mass Index (BMI)")
         self.widget(at.button, "Save and validate record").click()
         with mock.patch.object(streamlit, "data_editor", fill):
             self.ok(at.run())
         saved = list_records(self.doctor["id"], "kidney")[0]
         values = json.loads(saved["values_json"])
-        self.assertEqual((saved["status"], values["Gender"], values["Smoking"], values["SystolicBP"]), ("Ready", 1, 0, 120))
+        self.assertEqual((saved["status"], values["physically_active"], values["hypertension"], values["bmi"]),
+                         ("Ready", 1, 0, 27.5))
         # A mistyped word is asked for again in the same words the editor shows, never 'enter a number' or '0 or 1'.
         stats = feature_summary("kidney")
-        for feature, typed, message in [("Smoking", "Yess", "Smoking: enter Yes or No."), ("Smoking", "2", "Smoking: enter Yes or No."),
-                                        ("Edema", "0.5", "Edema: enter Yes or No."), ("Gender", "Female?", "Gender: enter Male or Female."),
-                                        ("Gender", "inf", "Gender: enter Male or Female.")]:
+        for feature, typed, message in [("hypertension", "Yess", "hypertension: enter Yes or No."),
+                                        ("hypertension", "2", "hypertension: enter Yes or No."),
+                                        ("family_kidney", "0.5", "family_kidney: enter Yes or No."),
+                                        ("gender", "Female?", "gender: choose a category from the training data.")]:
             clean, issues = validate_row({feature: typed}, "kidney", [feature], stats)
             self.assertEqual((issues, clean[feature]), ([message], typed))
-        self.assertEqual(issue_text("Smoking: enter Yes or No."), "Smoking: enter Yes or No")
-        self.assertEqual(validate_row({"Smoking": "yes", "Gender": "F"}, "kidney", ["Smoking", "Gender"], stats),
-                         ({"Smoking": 1, "Gender": 1}, []))
-        self.assertEqual(validate_row({"BMI": "abc"}, "kidney", ["BMI"], stats)[1], ["BMI: enter a number."])
+        self.assertEqual(issue_text("hypertension: enter Yes or No."), "History of Hypertension: enter Yes or No")
+        self.assertEqual(validate_row({"hypertension": "yes", "gender": "female"}, "kidney", ["hypertension", "gender"], stats),
+                         ({"hypertension": 1, "gender": "Female"}, []))
+        self.assertEqual(validate_row({"bmi": "abc"}, "kidney", ["bmi"], stats)[1], ["bmi: enter a number."])
 
     def test_issues_use_field_labels_without_double_punctuation(self):
         self.assertEqual(issue_text("HbA1c_level: 40 is too far outside the training range for the model to score; "
@@ -403,7 +412,8 @@ class ClinicalDesignTests(unittest.TestCase):
         self.assertEqual([r["status"] for r in list_records(self.doctor["id"])], ["Ready", "Ready"])  # stored as before
         at = self.page()
         queue = self.frame(at, "Model score (%)")
-        self.assertEqual(queue[["Status", "Model score (%)", "Model"]].iloc[0].tolist(), ["Not flagged", 5.0, "Gradient boosting"])
+        named = model_label(best_model("diabetes"))
+        self.assertEqual(queue[["Status", "Model score (%)", "Model"]].iloc[0].tolist(), ["Not flagged", 5.0, named])
         self.assertEqual(queue["Status"].iloc[1], "Ready")
         self.assertEqual(self.widget(at.selectbox, "Record").options, ["Row 1 · B-1 · Not flagged", "Row 2 · B-2 · Ready"])
         self.assertEqual(self.widget(at.selectbox, "Review decision").options, ["Not flagged", "Reviewed", "Excluded"])
@@ -416,10 +426,10 @@ class ClinicalDesignTests(unittest.TestCase):
         self.ok(at.run())
         self.assertEqual(list_records(self.doctor["id"])[0]["status"], "Ready")
         self.assertEqual(next(b.label for b in at.button if b.label.startswith("Score")),
-                         "Score 2 eligible records with Gradient boosting")
+                         f"Score 2 eligible records with {named}")
         # The model picker and its explanation name the models the same way.
-        self.assertEqual(self.widget(at.selectbox, "Prediction model").options[0], "Gradient boosting — Recommended")
-        self.assertIn("Gradient boosting is recommended because", "\n".join(m.value for m in at.markdown))
+        self.assertEqual(self.widget(at.selectbox, "Prediction model").options[0], f"{named} — Recommended")
+        self.assertIn(f"{named} is recommended", "\n".join(m.value for m in at.markdown))
         self.widget(at.selectbox, "Show").set_value("Not flagged")
         update_record(self.doctor["id"], records[0]["id"], status="Reviewed")
         self.assertIn("No records scored below the threshold in this upload.", [c.value for c in self.ok(at.run()).caption])

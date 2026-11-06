@@ -346,6 +346,9 @@ h1, h2, h3, h4, h5, h6 { color: var(--ahead-title); }
 .result-title { font-size: 1.45rem; font-weight: 740; margin: 8px 0 4px; }
 .result-elevated .result-title { color: var(--ahead-danger); }
 .result-lower .result-title { color: var(--ahead-success); }
+/* the model's own estimate when a measured value or a past heart event set the result: neutral, never red or green */
+.result-neutral { border-top: 4px solid var(--ahead-muted); }
+.result-neutral .result-title { color: var(--ahead-title); }
 .result-score { color: var(--ahead-text); font-size: 0.9rem; margin-top: 13px; }
 .result-text { color: var(--ahead-muted); font-size: 0.79rem; line-height: 1.6; margin-top: 10px; }
 .result-meta { color: var(--ahead-muted); font-size: 0.7rem; margin-top: 14px; }

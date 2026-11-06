@@ -17,16 +17,19 @@ from streamlit.testing.v1 import AppTest, element_tree
 
 from ahead.clinical_data import input_bounds, prepare_upload, validate_row
 from ahead.platform_data import init_platform, record_prediction_history
-from ahead.resources import best_model, feature_summary, features
+from ahead.config import AGE_FIELD, OPTIONAL_INPUTS, form_fields
+from ahead.resources import best_model, feature_summary
 from ahead.storage import authenticate, create_user, init_db, insert_records, list_records, save_scoring_run, update_record
 
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
 
 
 def typical_row(disease, **changes):
-    stats, age_key = feature_summary(disease), "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
-    row = {f: stats[f]["default"] if stats[f]["kind"] == "category" else stats[f]["mode"] if stats[f]["binary"]
-           else round(stats[f]["median"], 2) for f in features(disease) if f != age_key}
+    """An upload row: every form column at its typical value, the optional labs and readings blank (the model alone
+    sorts it), age from the DOB."""
+    stats, age_key, optional = feature_summary(disease), AGE_FIELD[disease], OPTIONAL_INPUTS.get(disease, [])
+    row = {f: "" if f in optional else stats[f]["default"] if stats[f]["kind"] == "category" else stats[f]["mode"]
+           if stats[f]["binary"] else round(stats[f]["median"], 2) for f in form_fields(disease) if f != age_key}
     return {"PatientID": "DEMO-001", "DOB": "1980-01-01", **row, **changes}
 
 
@@ -40,7 +43,7 @@ class ClinicalFixTests(unittest.TestCase):
         create_user("other@test.local", "test-password-123", "Doctor", "Other")
         self.doctor = authenticate("doc@test.local", "test-password-123", "Doctor")
         self.other = authenticate("other@test.local", "test-password-123", "Doctor")["id"]
-        self.required, self.stats = features("diabetes"), feature_summary("diabetes")
+        self.required, self.stats = form_fields("diabetes"), feature_summary("diabetes")
 
     def tearDown(self):
         self.temp.cleanup(); os.environ.pop("AHEAD_DB_PATH", None)
@@ -60,7 +63,7 @@ class ClinicalFixTests(unittest.TestCase):
 
     def upload(self, disease, rows, cohort="cohort"):
         frame = pd.DataFrame(rows).astype(str)
-        insert_records(self.doctor["id"], cohort, disease, prepare_upload(frame, disease, features(disease),
+        insert_records(self.doctor["id"], cohort, disease, prepare_upload(frame, disease, form_fields(disease),
                                                                           feature_summary(disease), ["PatientID"]))
         return sorted(list_records(self.doctor["id"], disease), key=lambda r: r["source_row"])
 
@@ -136,7 +139,8 @@ class ClinicalFixTests(unittest.TestCase):
     def test_widened_bounds_stop_at_physical_limits(self):
         for disease, feature, bad, good in [("heart", "PhysicalHealthDays", [31, 38], 30), ("heart", "MentalHealthDays", [31], 30),
                                             ("heart", "SleepHours", [0, 25], 24), ("heart", "BMI", [0, 9.5], 10),
-                                            ("diabetes", "bmi", [0, 0.5], 10.5), ("kidney", "SerumCreatinine", [0, 0.1], 0.2)]:
+                                            ("diabetes", "bmi", [0, 0.5], 10.5), ("kidney", "creatinine", [0, 0.1, 15.5], 0.2),
+                                            ("kidney", "bmi", [0, 9.9], 12)]:
             stats = feature_summary(disease)
             for value in bad:
                 self.assertTrue(validate_row({feature: value}, disease, [feature], stats)[1], (feature, value))
@@ -144,7 +148,8 @@ class ClinicalFixTests(unittest.TestCase):
         heart, kidney = feature_summary("heart"), feature_summary("kidney")
         self.assertEqual(input_bounds("SleepHours", heart["SleepHours"]), (1, 24))
         # The patient form needs float bounds for float inputs (number_input rejects mixed int/float).
-        self.assertTrue(all(isinstance(b, float) for b in input_bounds("BMI", kidney["BMI"])))
+        self.assertTrue(all(isinstance(b, float) for b in input_bounds("bmi", kidney["bmi"])))
+        self.assertTrue(all(isinstance(b, float) for b in input_bounds("creatinine", kidney["creatinine"])))
 
     def test_old_range_issues_are_rechecked_on_start_up(self):
         old = "HbA1c_level: {:g} is outside the training range (3.5–9); verify it."
@@ -264,7 +269,7 @@ class ClinicalFixTests(unittest.TestCase):
         invalid = "Invalid date of birth; use YYYY-MM-DD."
         for disease, typo, new_dob in [("diabetes", "1990-13-45", "1990-06-01"), ("kidney", "2090-01-01", "1990-06-01"),
                                        ("heart", "2015-01-01", "1960-01-01")]:  # bad date, future date, under 18
-            age_key = "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
+            age_key = AGE_FIELD[disease]
             self.upload(disease, [typical_row(disease)], cohort=f"{disease}-typo")
             at = self.page()
             self.widget(at.selectbox, "Disease screening").set_value(disease)

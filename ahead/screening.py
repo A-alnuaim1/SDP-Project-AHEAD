@@ -17,24 +17,24 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from ahead.clinical_data import OPTIONAL_BLANK, input_bounds, shown_value
+from ahead.clinical_data import OPTIONAL_BLANK, input_bounds, model_inputs, shown_value
 from ahead.components import (
-    current_user, disclaimer, go_to, markdown_literal, model_label, model_selector, page_header, pref, record_screening,
-    result_card, section_heading, track_panel,
+    current_user, disclaimer, go_to, markdown_literal, model_label, model_overridden, model_selector, page_header, pref,
+    record_screening, result_card, section_heading, track_panel,
 )
 from ahead.config import (
-    DISEASE_GROUP_DESCRIPTIONS, DISEASES, FEATURE_GROUPS, GENDER_CODED_FIELDS, GROUP_DESCRIPTIONS, OPTIONAL_INPUTS,
-    REQUIRED_FOR_SCORE, pretty_label,
+    DISEASE_GROUP_DESCRIPTIONS, DISEASES, FEATURE_GROUPS, FORM_QUESTIONS, GENDER_CODED_FIELDS, GROUP_DESCRIPTIONS,
+    MODEL_INPUTS, OPTIONAL_INPUTS, form_fields, pretty_label,
 )
 from ahead.resources import (
-    best_model, decision_threshold, feature_summary, features, final_metrics, gemini_available, generate_text,
-    load_pipeline, missing_inputs_profile, validation_results,
+    decision_threshold, feature_summary, features, gemini_available, generate_text, load_pipeline, model_test_metrics,
+    same_series,
 )
 from ahead.pages.settings import open_care_team
 from ahead.platform_data import doctors_for, prevention_plans
 from ahead.reports import patient_report
 from ahead.theme import show_chart, style_figure, tokens
-from ahead.triage import track_text, triage
+from ahead.triage import HISTORY, entered, missing_tests, prepared_values, track_text, triage
 
 
 # =============================================================================
@@ -56,17 +56,23 @@ def _num(value):
 
 
 def _model_frame(values: dict, columns=None) -> pd.DataFrame:
-    """Blank optional inputs become NaN so each pipeline's median imputer fills them."""
+    """One model input row; a blank becomes NaN so the pipeline's imputer fills it."""
     return pd.DataFrame([{k: (np.nan if _blank(v) else v) for k, v in values.items()}], columns=columns)
 
 
-def render_feature_input(stats: dict, feature: str, key: str, optional: bool = False, needed: bool = False):
+def model_row(disease: str, values: dict) -> dict:
+    """The model's inputs for a screening's answers (clinical_data.model_inputs), only the pipeline's columns."""
+    row = model_inputs(disease, values)
+    return {feature: row.get(feature) for feature in features(disease)}
+
+
+def render_feature_input(stats: dict, feature: str, key: str, optional: bool = False, label: str | None = None):
     """
     One form widget for *feature*, built from the cached dataset statistics. Optional measurements
     start empty instead of at the training median, so nobody submits a typical value by accident.
     """
     info = stats[feature]
-    label = pretty_label(feature)
+    label = label or pretty_label(feature)
 
     if info["kind"] == "category":
         options = info["options"]
@@ -91,8 +97,7 @@ def render_feature_input(stats: dict, feature: str, key: str, optional: bool = F
     # Same widened range the clinical upload accepts, so both sides score the same values.
     low, high = input_bounds(feature, info)
 
-    blank = {"value": None, "placeholder": "Needed for a score" if needed else "Optional"} \
-        if optional else {}
+    blank = {"value": None, "placeholder": "Optional"} if optional else {}
 
     if feature.lower() == "age" or info["integer"]:
         return st.number_input(
@@ -106,7 +111,7 @@ def render_feature_input(stats: dict, feature: str, key: str, optional: bool = F
 
 
 def individual_sensitivity(pipeline, values: dict, stats: dict) -> list:
-    """Illustrative change when one entered value is replaced by the training median/mode."""
+    """Illustrative change when one model input (model_row) is replaced by the training median/mode."""
     baseline = float(pipeline.predict_proba(_model_frame(values))[0, 1])
     comparisons = []
     for feature, actual in values.items():
@@ -219,18 +224,24 @@ def _smoker(value) -> bool:
     return v.startswith("current") or v.startswith("former") or v == "ever" or v == "not current"
 
 
+def _yes(value) -> bool:
+    """A 0/1 or Yes/No answer that is yes (a blank is not)."""
+    return entered(value) == 1 or _is_yes(value)
+
+
 def identify_risk_factors(disease: str, values: dict) -> list:
     factors = []
+    values = prepared_values(disease, values) if disease == "kidney" else (values or {})   # older kidney keys too
     g = values.get
 
     if disease == "diabetes":
-        if float(g("bmi", 0)) >= 30:
+        if (entered(g("bmi")) or 0) >= 30:
             factors.append("Higher BMI")
-        if int(g("hypertension", 0)) == 1:
+        if _yes(g("hypertension")):
             factors.append("History of hypertension")
-        if int(g("heart_disease", 0)) == 1:
+        if _yes(g("heart_disease")):
             factors.append("History of heart disease")
-        hba1c, glucose = _num(g("HbA1c_level")), _num(g("blood_glucose_level"))
+        hba1c, glucose = entered(g("HbA1c_level")), entered(g("blood_glucose_level"))
         if hba1c is not None and hba1c >= 5.7:
             factors.append("Higher entered HbA1c")
         if glucose is not None and glucose >= 100:
@@ -245,6 +256,10 @@ def identify_risk_factors(disease: str, values: dict) -> list:
             factors.append("No regular physical activity")
         if _smoker(g("SmokerStatus", "")):
             factors.append("Smoking history")
+        if _is_yes(g("HadHeartAttack", "")):
+            factors.append("Previous heart attack")
+        if _is_yes(g("HadAngina", "")):
+            factors.append("Angina or coronary heart disease")
         if _is_yes(g("HadStroke", "")):
             factors.append("Previous stroke")
         diabetes = str(g("HadDiabetes", "")).strip().lower()
@@ -256,24 +271,32 @@ def identify_risk_factors(disease: str, values: dict) -> list:
             factors.append("History of kidney disease")
 
     elif disease == "kidney":
-        if int(g("Smoking", 0)) == 1:
-            factors.append("Smoking")
-        if float(g("BMI", 0)) >= 30:
+        if _smoker(g("smoking_history", "")) or _yes(g("Smoking")):
+            factors.append("Smoking history")
+        if (entered(g("bmi")) or 0) >= 30:
             factors.append("Higher BMI")
-        if int(g("FamilyHistoryKidneyDisease", 0)) == 1:
+        if entered(g("physically_active")) == 0:
+            factors.append("No regular physical activity")
+        if _yes(g("hypertension")):
+            factors.append("History of high blood pressure")
+        if _yes(g("diabetes")):
+            factors.append("History of diabetes")
+        if _yes(g("heart_disease")):
+            factors.append("History of coronary heart disease")
+        if _yes(g("family_kidney")):
             factors.append("Family history of kidney disease")
-        if int(g("FamilyHistoryHypertension", 0)) == 1:
-            factors.append("Family history of hypertension")
-        if int(g("FamilyHistoryDiabetes", 0)) == 1:
-            factors.append("Family history of diabetes")
-        if int(g("Edema", 0)) == 1:
-            factors.append("Reported edema")
-        systolic, diastolic = _num(g("SystolicBP")), _num(g("DiastolicBP"))
+        for legacy, text in (("FamilyHistoryHypertension", "Family history of hypertension"),
+                             ("FamilyHistoryDiabetes", "Family history of diabetes"), ("Edema", "Reported edema")):
+            if _yes(g(legacy)):   # an older saved kidney screening's answers
+                factors.append(text)
+        if (entered(g("age")) or 0) >= 60:
+            factors.append("Age 60 or older")
+        systolic, diastolic = entered(g("systolic_bp")), entered(g("diastolic_bp"))
         if (systolic is not None and systolic >= 130) or (diastolic is not None and diastolic >= 80):
             factors.append("Higher entered blood pressure")
-        gfr, acr = _num(g("GFR")), _num(g("ACR"))
+        gfr, acr = entered(g("egfr")), entered(g("uacr"))
         if gfr is not None and gfr < 60:
-            factors.append("Lower entered GFR")
+            factors.append("Lower eGFR")
         if acr is not None and acr >= 30:
             factors.append("Higher entered urine ACR")
 
@@ -465,10 +488,14 @@ DOCTOR_URGENT_MESSAGES = {
 
 def get_next_steps(disease: str, prediction: int, doctor: bool = False, track: dict | None = None) -> list:
     """
-    The steps for a result. An urgent *track* (a triage() result) reads the flagged steps, which open with a medical
-    review, even when the model did not flag it: routine screening would contradict "See a doctor soon".
+    The steps for a result. A *track* (a triage() result) chooses them, not the model's flag: an urgent or at-risk
+    track reads the flagged steps, which open with a medical review, and a not-flagged one the routine steps, so a lab
+    value that set or cleared the track never gets advice that contradicts the track panel. Without a scored track
+    the model's flag (prediction) decides.
     """
-    return (DOCTOR_NEXT_STEPS if doctor else NEXT_STEPS)[disease][1 if track and track["urgent"] else prediction]
+    flagged = (track["track"] in ("urgent", "at_risk") if track and track["track"] != "no_score"
+               else bool(prediction))
+    return (DOCTOR_NEXT_STEPS if doctor else NEXT_STEPS)[disease][int(flagged)]
 
 
 def _urgent(disease: str, doctor: bool) -> None:
@@ -494,14 +521,21 @@ def _action_cards(steps: list) -> None:
 
 def _insight_track(prediction: int, track: dict | None, doctor: bool) -> tuple:
     """
-    (result label, track line, extra requirement) for the prompt. An urgent track names its reasons, so AHEAD Insight
-    is never told only "Lower screening risk" for a result the page marks "See a doctor soon".
+    (result label, track line, extra requirement) for the prompt. An urgent track names its reasons, and a track a
+    measured lab value set names that value, so AHEAD Insight is never told only "Lower screening risk" for a result
+    the page marks "See a doctor soon" or "At risk".
     """
     result_label = "Elevated screening risk" if prediction == 1 else "Lower screening risk"
+    if track and track.get("lab"):   # a measured lab value set the track, whatever the model's flag says
+        label = track_text(track, "doctor" if doctor else "patient")["label"]
+        rule = "" if track["track"] == "not_flagged" else "- Never describe the result as reassuring or low risk.\n"
+        return f"{label} (set by a measured lab value)", f'AHEAD track: "{label}". {track["lab"]["doctor"]}\n', rule
     if not (track and track["urgent"]):
         return result_label, "", ""
     label = track_text(track, "doctor" if doctor else "patient")["label"]
-    if prediction != 1:   # only an entered value can make a result the model did not flag urgent
+    if any(reason["kind"] == HISTORY for reason in track["reasons"]):
+        result_label = "A past heart attack, angina or stroke was reported, so the model score does not apply"
+    elif prediction != 1:   # only an entered value can make a result the model did not flag urgent
         result_label = ("Not flagged by the model, but entered values are in a range doctors use when diagnosing a "
                         "condition")
     reasons = " ".join(reason["doctor"] for reason in track["reasons"])   # third person suits both prompts
@@ -513,9 +547,9 @@ def _insight_track(prediction: int, track: dict | None, doctor: bool) -> tuple:
 def generate_ai_guidance(disease, prediction, probability, risk_factors, user_values, threshold, usual_threshold,
                          doctor: bool = False, track: dict | None = None) -> str:
     result_label, track_line, track_rule = _insight_track(prediction, track, doctor)
-    cut_off = f"{threshold * 100:g}%" + (
-        f" (usual {usual_threshold * 100:g}%, lowered because some lab values were not provided; "
-        "a score above this cut-off is flagged even if the number looks low)" if threshold < usual_threshold else "")
+    cut_off = f"{threshold * 100:g}%"
+    meaning = DISEASES[disease].get("score_note", {}).get("doctor" if doctor else "patient")
+    score_line = f"What the score means: {meaning}\n" if meaning else ""
     friendly_values = {pretty_label(k): v for k, v in user_values.items() if not _blank(v)}
     not_provided = [pretty_label(k) for k, v in user_values.items() if _blank(v)]
     if doctor:
@@ -531,10 +565,10 @@ review. Help the clinician read the existing result in the context of the entere
 Condition screened: {DISEASES[disease]['long_label']}
 Screening result: {result_label}
 {track_line}Model screening score: {probability * 100:.1f}%
-Classification threshold: {cut_off}
+{score_line}Classification threshold: {cut_off}
 Relevant factors identified by AHEAD: {risk_factors if risk_factors else 'No major rule-based factors highlighted'}
 Entered values: {friendly_values}
-Not entered (the model used typical training-data values instead): {', '.join(not_provided) or 'none'}
+Not entered (not model inputs; AHEAD could not check them): {', '.join(not_provided) or 'none'}
 
 Write a concise, professional interpretation for a clinician.
 
@@ -545,7 +579,7 @@ Use exactly these headings:
 
 Requirements:
 {track_rule}- Refer to "the patient" in the third person; never address the reader as the patient.
-- Make clear that the result is an educational screening estimate, not a diagnosis, and that the score is not a calibrated probability.
+- Make clear that the result is an educational screening estimate, not a diagnosis, and that the score is not the patient's own probability of disease.
 - In "Notable Entered Values", identify 2 to 4 entered values or history items that are relevant, without claiming that any single input caused the prediction.
 - If an individual measurement may deserve attention even when the overall result is lower, say so.
 - In "Points to Consider", give 2 to 4 brief considerations. Do not prescribe specific tests, referrals or treatment; say "as clinically indicated" where relevant.
@@ -568,10 +602,10 @@ existing result in the context of the information they entered.
 Condition screened: {DISEASES[disease]['long_label']}
 Screening result: {result_label}
 {track_line}Model screening score: {probability * 100:.1f}%
-Classification threshold: {cut_off}
+{score_line}Classification threshold: {cut_off}
 Relevant factors identified by AHEAD: {risk_factors if risk_factors else 'No major rule-based factors highlighted'}
 Patient-entered information: {friendly_values}
-Not provided by the patient (the model used typical training-data values instead): {', '.join(not_provided) or 'none'}
+Not provided by the patient (not model inputs; AHEAD could not check them): {', '.join(not_provided) or 'none'}
 
 Write a concise, calm, professional and patient-friendly interpretation.
 
@@ -603,43 +637,15 @@ Requirements:
 # =============================================================================
 
 LAB_ADVICE = {
-    "diabetes": "An HbA1c or fasting blood glucose test gives a much more reliable picture; "
-                "repeat this screening with your results when you have them.",
-    "kidney": "Add these values from a recent reading or test report when you have them for a more precise estimate.",
+    "diabetes": "An HbA1c test gives a much more reliable picture; repeat this screening with your result when you "
+                "have it.",
+    "kidney": "A blood test for creatinine (which gives eGFR) and a urine ACR test show how your kidneys are working; "
+              "repeat this screening with the results when you have them.",
 }
 DOCTOR_LAB_ADVICE = {
-    "diabetes": "An HbA1c or fasting plasma glucose result gives a much more reliable picture; repeat the screening "
-                "with it when it is available.",
-    "kidney": "Adding these values from a recent reading or laboratory report gives a more precise estimate.",
-}
-
-# Shown when a value in REQUIRED_FOR_SCORE is blank.
-NO_SCORE_REASON = {
-    "kidney": "Kidney health is checked with a blood test for creatinine (which also gives eGFR) and a urine test "
-              "for albumin (ACR). AHEAD asks for all three before it gives a kidney estimate.",
-}
-
-NO_SCORE_STEPS = {
-    "kidney": [
-        ("Ask about kidney function tests",
-         "A blood test for creatinine and eGFR and a urine test for albumin (ACR) are routine. They are especially "
-         "recommended if you have diabetes, high blood pressure or a family history of kidney disease."),
-        ("Repeat this screening with your results",
-         "Enter creatinine, eGFR and urine ACR from your test report to get a kidney estimate."),
-        ("Keep an eye on blood pressure",
-         "High blood pressure is a common cause of kidney problems. A home or pharmacy reading is a simple start."),
-    ],
-}
-DOCTOR_NO_SCORE_STEPS = {
-    "kidney": [
-        ("Consider kidney-function assessment",
-         "Serum creatinine with eGFR and a urine albumin-to-creatinine ratio (ACR) are the usual assessment, "
-         "particularly with diabetes, hypertension or a family history of kidney disease."),
-        ("Repeat the screening with the results",
-         "Enter serum creatinine, eGFR and urine ACR from the laboratory report to obtain a kidney estimate."),
-        ("Review blood pressure",
-         "Hypertension is a common contributor to kidney disease; a recent reading helps put the result in context."),
-    ],
+    "diabetes": "An HbA1c result gives a much more reliable picture; repeat the screening with it when it is available.",
+    "kidney": "Serum creatinine (eGFR) and a urine albumin-to-creatinine ratio show where the patient stands; repeat "
+              "the screening with them when they are available.",
 }
 
 # Form notes that do not assume the reader is the person being screened (config's notes say "you").
@@ -648,17 +654,31 @@ DOCTOR_GROUP_DESCRIPTIONS = {
     "Clinical Measurements": "Optional. Recent laboratory values; leave blank any that are not available.",
 }
 DOCTOR_DISEASE_GROUP_DESCRIPTIONS = {
+    "heart": {
+        "Medical History": "Conditions the patient has been told about by a doctor. A past heart attack, angina or "
+                           "stroke puts the result on the urgent track: the screening is not intended for established "
+                           "cardiovascular disease.",
+    },
+    "diabetes": {
+        "Clinical Measurements": "Optional. Recent laboratory values; leave blank any that are not available. They "
+                                 "are not model inputs: AHEAD checks them against fixed ranges.",
+    },
     "kidney": {
-        "Clinical Measurements": "From a recent blood or urine test. Serum creatinine, eGFR and urine ACR are needed "
-                                 "for a kidney estimate; leave blank any others that are not available. ACR is in mg/g "
-                                 "(a result in mg/mmol times 8.84 is mg/g).",
+        "Medical History": "Conditions the patient has been told about by a doctor, and family history.",
+        "Clinical Measurements": "Optional. Recent laboratory values; leave blank any that are not available. With "
+                                 "creatinine and no eGFR, AHEAD works out eGFR (CKD-EPI 2021). ACR is in mg/g (a "
+                                 "result in mg/mmol times 8.84 is mg/g).",
     },
 }
 DOCTOR_SUBTITLES = {
-    "diabetes": "Enter the lifestyle and medical-history values, and lab values where available, to generate an "
-                "early-awareness diabetes screening estimate.",
-    "kidney": "Enter the lifestyle and family-history values and the kidney test results to generate a chronic "
-              "kidney disease screening estimate.",
+    "heart": "Enter the patient's answers. The model compares them with BRFSS 2022 respondents who reported a past "
+             "myocardial infarction; it is not a 10-year risk estimate. A past heart attack, angina or stroke puts the "
+             "result on the urgent track.",
+    "diabetes": "Enter the patient's answers, and lab values where available. The model estimates whether HbA1c is "
+                "likely to be 5.7% or higher in adults never told they have diabetes; an entered HbA1c sets the track "
+                "instead.",
+    "kidney": "Enter the patient's answers, and kidney tests where available. The model estimates whether eGFR is "
+              "likely to be below 60 or urine ACR 30 mg/g or more; entered tests set the track instead.",
 }
 
 
@@ -675,7 +695,10 @@ def _short(feature: str) -> str:
 
 
 def _listed(names: list) -> str:
-    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    if len(names) == 1:
+        return names[0]
+    last = ", and " if any(" and " in name for name in names) else " and "   # 'creatinine and eGFR, and urine ACR'
+    return ", ".join(names[:-1]) + last + names[-1]
 
 
 def _pct(share: float) -> str:
@@ -683,74 +706,55 @@ def _pct(share: float) -> str:
     return f"{share:.1%}" if 0.995 <= share < 1 else f"{share:.0%}"
 
 
-def low_specificity_caveat(disease: str, profile: dict) -> str:
-    """Extra warning when, with these inputs blank, the model cleared few people without the condition."""
-    label, test, negatives = DISEASES[disease]["long_label"], profile["test"], profile.get("test_negatives")
-    text = ""
-    if test["specificity"] < 0.15:
-        text += (f" It flagged {'everyone' if test['specificity'] == 0 else 'almost everyone'} without {label} too, "
-                 "so a flag here tells you very little.")
-    if negatives and negatives < 100:
-        text += (f" Only {negatives} people in that test data did not have {label}, so the figures for people "
-                 "without it are a rough guide.")
-    return text
-
-
 def _left_blank(names: list, doctor: bool) -> str:
     """'You left X blank' for patients; 'X was left blank' for doctors."""
     if not doctor:
         return f"You left {_listed(names)} blank"
-    return f"{_listed(names)} {'was' if len(names) == 1 else 'were'} left blank"
+    return f"{_listed(names)} {'was' if len(names) == 1 and ' and ' not in names[0] else 'were'} left blank"
+
+
+def _in_sentence(label: str) -> str:
+    """'Creatinine and eGFR' -> 'creatinine and eGFR' mid-sentence; HbA1c and ACR keep their capitals."""
+    word = label.split(" ", 1)[0]
+    return label[:1].lower() + label[1:] if word[1:].islower() else label
 
 
 def missing_note(disease: str, result: dict, doctor: bool = False) -> str:
-    """The caveat shown above a score that was produced with optional measurements left blank."""
-    label = DISEASES[disease]["long_label"]
-    paragraphs = [f"{_left_blank([_short(f) for f in result['missing']], doctor)}, so the model used typical "
-                  "values from its training data in their place."]
-    usual = decision_threshold(disease, result["model"])
-    if result["threshold"] < usual:
-        paragraphs[0] += (f" To make up for that, AHEAD flags a result from {result['threshold'] * 100:g}% instead "
-                          f"of its usual {usual * 100:g}%.")
-    profile = result.get("profile")
-    if profile:
-        test, full = profile["test"], profile["full"]
-        measured = (f"On held-out test data with the same values blank, the model caught {_pct(test['recall'])} of "
-                    f"people with {label} and correctly cleared {_pct(test['specificity'])} of people without it")
-        if full:
-            measured += f" (with every value entered: {_pct(full['recall'])} and {_pct(full['specificity'])})"
-        measured += "."
-        measured += low_specificity_caveat(disease, profile)
-        paragraphs.append(measured)
-    paragraphs.append("A lower score does not rule the condition out. "
-                      + (DOCTOR_LAB_ADVICE if doctor else LAB_ADVICE).get(disease, ""))
+    """
+    The caveat above a result when a value the track reads was left blank (triage.missing_tests). The model never
+    reads lab values, so without them the result rests on its estimate from the answers; when another measured value
+    already set the track, only the test to ask for is named. Empty when nothing is asked.
+    """
+    tests = missing_tests(disease, result["values"])
+    labs = [_in_sentence(test["label"]) for test in tests if test["label"] != "Blood pressure"]
+    paragraphs = []
+    # A measured value already set the track (an HbA1c, an eGFR worked out from creatinine ...): the result is not the
+    # model's estimate, so only the test to ask for is said.
+    sorted_by = triage(disease, result["values"])
+    measured = sorted_by["lab"] is not None or any(reason["kind"] in ("kidney", "diabetes")
+                                                   for reason in sorted_by["reasons"])
+    if labs and measured:
+        if doctor:
+            blank = _left_blank(labs, True)
+            actions = _listed([test["action"] for test in tests if test["label"] != "Blood pressure"])
+            paragraphs.append(f"{blank[:1].upper()}{blank[1:]}. {actions[:1].upper()}{actions[1:]}.")
+        else:
+            paragraphs.append(f"{_left_blank(labs, False)}. Ask your doctor about {_listed(labs)}.")
+    elif labs:
+        if doctor:
+            blank = _left_blank(labs, True)
+            paragraphs.append(f"{blank[:1].upper()}{blank[1:]}. The model does not read lab values, so without them "
+                              "this result rests on its estimate from the answers; a measured value would count for "
+                              f"more. {DOCTOR_LAB_ADVICE.get(disease, '')}".strip())
+        else:
+            paragraphs.append(f"{_left_blank(labs, False)}. The model doesn't use test results, so without them this "
+                              "result is its estimate from your answers; a measured value counts for more. "
+                              f"{LAB_ADVICE.get(disease, '')}".strip())
+    if len(labs) < len(tests):   # blood pressure
+        paragraphs.append("Blood pressure was not entered, so AHEAD could not check it. A recent reading is a simple "
+                          "start." if doctor else "You left blood pressure blank, so AHEAD could not check it. A home "
+                          "or pharmacy reading is a simple start.")
     return "\n\n".join(paragraphs)
-
-
-def lab_results_needed(disease: str, result: dict, doctor: bool = False) -> None:
-    """Shown instead of a score when a measurement the model cannot work without was left blank."""
-    needed = [_short(f) for f in REQUIRED_FOR_SCORE[disease] if f in result["missing"]]
-    section_heading("Lab results needed", f"AHEAD can't give a {DISEASES[disease]['label'].lower()} estimate without them.")
-    source = "the entered values" if doctor else "your answers"
-    st.warning(
-        f"{_left_blank(needed, doctor)}. {NO_SCORE_REASON[disease]} No score is shown and nothing was saved; "
-        f"the factors below come only from {source}."
-    )
-    # Draws nothing unless an entered value is already in a diagnostic range.
-    _track(triage(disease, result["values"]), doctor, f"{disease}_share", "no_score")
-    factors = identify_risk_factors(disease, result["values"])
-    if factors:
-        st.html("".join(f'<span class="factor-chip">{escape(f)}</span>' for f in factors))
-    else:
-        st.info(f"No rule-based risk factors were highlighted from {source}.")
-    if doctor:
-        section_heading("Points to review", f"Considerations before a {DISEASES[disease]['label'].lower()} estimate can be given.")
-        _action_cards(DOCTOR_NO_SCORE_STEPS[disease])
-    else:
-        section_heading("What you can do next", "")
-        _action_cards(NO_SCORE_STEPS[disease])
-        st.link_button("Find a nearby clinic (map search)", "https://www.google.com/maps/search/hospital+near+me/")
-    _urgent(disease, doctor)
 
 
 # =============================================================================
@@ -761,8 +765,6 @@ def lab_results_needed(disease: str, result: dict, doctor: bool = False) -> None
 NOT_SAVED = {
     "history_off": ("This result was not saved because Keep screening history is off in Settings",
                     "Download the PDF to show them.", "Download the PDF to show your doctor."),
-    "no_score": ("AHEAD saves only results with a score", "Tell them about the values above.",
-                 "Tell your doctor about the values above."),
 }
 
 
@@ -837,8 +839,7 @@ def render_predictor(disease: str) -> bool:
         section_heading("Prediction model", "Choose the model that scores the entered values.")
     else:
         st.markdown("#### Prediction model")
-    pipeline, selected_name, threshold = model_selector(disease, key=f"{disease}_model_selector",
-                                                        blank_labs=bool(OPTIONAL_INPUTS.get(disease)))
+    pipeline, selected_name, threshold = model_selector(disease, key=f"{disease}_model_selector")
     if pipeline is None:
         st.error("No trained model is available. Run `python train_model.py` first.")
         return False
@@ -846,11 +847,11 @@ def render_predictor(disease: str) -> bool:
     stats = feature_summary(disease)
     feature_list = features(disease)
 
-    # Every model feature must appear in the form; anything missing from FEATURE_GROUPS
-    # would otherwise be silently imputed by the pipeline.
+    # Every model feature must come from the form; anything missing from FEATURE_GROUPS would otherwise be silently
+    # imputed by the pipeline. Diabetes and kidney build their model inputs from the answers (config.MODEL_INPUTS).
     groups = dict(FEATURE_GROUPS[disease])
     grouped = {f for section in groups.values() for f in section}
-    leftover = [f for f in feature_list if f not in grouped]
+    leftover = [f for f in feature_list if f not in grouped] if disease not in MODEL_INPUTS else []
     if leftover:
         groups["Additional Information"] = leftover
 
@@ -866,14 +867,13 @@ def render_predictor(disease: str) -> bool:
 </div>
 """
             )
-            active = [f for f in section_features if f in feature_list]
-            needed = [f for f in REQUIRED_FOR_SCORE.get(disease, []) if f in active]
             columns = st.columns(3)
-            for index, feature in enumerate(active):
+            for index, feature in enumerate(section_features):
                 with columns[index % 3]:
                     values[feature] = render_feature_input(
                         stats, feature, f"{disease}_{feature}",
-                        optional=feature in OPTIONAL_INPUTS.get(disease, []), needed=feature in needed,
+                        optional=feature in OPTIONAL_INPUTS.get(disease, []),
+                        label=None if doctor else FORM_QUESTIONS.get(disease, {}).get(feature),
                     )
         submitted = st.form_submit_button("Generate Screening Result", width="stretch", type="primary")
 
@@ -881,20 +881,15 @@ def render_predictor(disease: str) -> bool:
     result = None
     if submitted:
         missing = [f for f in OPTIONAL_INPUTS.get(disease, []) if f in values and _blank(values[f])]
-        if any(f in missing for f in REQUIRED_FOR_SCORE.get(disease, [])):
-            result = {"values": values, "no_score": True, "missing": missing, "model": selected_name}
-        else:
-            probability = float(pipeline.predict_proba(_model_frame(values, feature_list))[0][1])
-            profile = missing_inputs_profile(disease, selected_name, missing) if missing else None
-            # A blank input may lower the threshold (scripts/missing_inputs.py), never raise it.
-            used_threshold = min(profile["threshold"], threshold) if profile else threshold
-            prediction = int(probability >= used_threshold)
-            result = {
-                "values": values, "probability": probability, "prediction": prediction,
-                "model": selected_name, "threshold": used_threshold, "missing": missing, "profile": profile,
-                "saved": pref("keep_history"),   # record_screening saves only then, so only then can a doctor see it
-            }
-            record_screening(disease, selected_name, probability, prediction, used_threshold, values)
+        # The model reads only its inputs (model_row): lab values never reach the diabetes or kidney model.
+        probability = float(pipeline.predict_proba(_model_frame(model_row(disease, values), feature_list))[0][1])
+        prediction = int(probability >= threshold)
+        result = {
+            "values": values, "probability": probability, "prediction": prediction,
+            "model": selected_name, "threshold": threshold, "missing": missing,
+            "saved": pref("keep_history"),   # record_screening saves only then, so only then can a doctor see it
+        }
+        record_screening(disease, selected_name, probability, prediction, threshold, values)
         st.session_state.last_results[disease] = result
     elif disease in st.session_state.last_results:
         result = st.session_state.last_results[disease]
@@ -905,16 +900,12 @@ def render_predictor(disease: str) -> bool:
         disclaimer()
         return False
 
-    if result.get("no_score"):
-        lab_results_needed(disease, result, doctor)
-        disclaimer()
-        return True
-
     values, probability, prediction = result["values"], result["probability"], result["prediction"]
     model_name, threshold = result["model"], result["threshold"]
     track = triage(disease, values, probability, threshold)   # the threshold this result was flagged against
+    shown_fields = form_fields(disease)
     input_frame = pd.DataFrame([{k: ("Not provided" if _blank(v) else v) for k, v in values.items()}],
-                               columns=feature_list)
+                               columns=shown_fields)
     # Everything below describes the model that produced *this* result, which may differ
     # from the one currently chosen in the selector when a stored result is being shown.
     result_pipeline = pipeline if model_name == selected_name else (load_pipeline(disease, model_name) or pipeline)
@@ -925,30 +916,28 @@ def render_predictor(disease: str) -> bool:
     # ------------------------------------------------------------------ result
     section_heading("Screening result" if doctor else "Screening Result",
                     "Risk estimate generated from the information entered above.")
-    if result.get("missing"):
-        st.warning(missing_note(disease, result, doctor))
+    note = missing_note(disease, result, doctor)
+    if note:
+        st.warning(note)
     left, right = st.columns(2)
     with left:
         # Screenings here are not attached to a record, so the card speaks about the entered values.
         result_card(prediction, probability, disease_label, model_name, threshold,
-                    audience="doctor" if doctor else "patient", subject="The entered values")
+                    audience="doctor" if doctor else "patient", subject="The entered values", disease=disease,
+                    track=track)
     with right:
         from ahead.visuals import score_ring
+        overridden = model_overridden(track)   # the track panel below, not the model's flag, is the result then
         score_ring(probability * 100, "Model screening score",
-                   status="Flagged for review" if prediction else "Not flagged",
-                   color="#C75D5D" if prediction else "#2E9477",
-                   note=f"Classification threshold: {threshold * 100:g}%. This score is not a calibrated clinical probability.")
+                   status=("Score does not apply" if overridden == "history" else
+                           f"Model: {'flagged' if prediction else 'not flagged'}" if overridden else
+                           "Flagged for review" if prediction else "Not flagged"),
+                   color="#5B8FA3" if overridden else "#C75D5D" if prediction else "#2E9477",
+                   note=f"Classification threshold: {threshold * 100:g}%. "
+                        + info.get("score_note", {}).get("short", "This score is not a calibrated clinical probability."))
     _track(track, doctor, f"{disease}_share", "" if result.get("saved", True) else "history_off", disease)
-    profile = result.get("profile")
-    if profile:
-        # Figures for this model with the same inputs blank, not the full-input ones.
-        report_metrics = {"precision_disease": profile["test"]["precision"], "recall_disease": profile["test"]["recall"]}
-        source, scope = "test", " with the same inputs left blank"
-    else:
-        report_metrics = final_metrics(disease) if model_name == best_model(disease) else next(
-            (m for m in validation_results(disease) if m["model"] == model_name), {})
-        source = "test" if model_name == best_model(disease) else "validation"
-        scope = " with every value entered" if result.get("missing") else ""
+    report_metrics = model_test_metrics(disease, model_name)   # each model at its own tuned threshold
+    source, scope = "test", ""
     st.info(
         f"{model_label(model_name) if doctor else model_name} {source}-set precision{scope}: {report_metrics.get('precision_disease', 0):.1%}; "
         f"recall: {report_metrics.get('recall_disease', 0):.1%}. "
@@ -959,8 +948,6 @@ def render_predictor(disease: str) -> bool:
     st.download_button("Download screening PDF", patient_report(
         disease, "Session screening", values, probability, threshold, model_name, report_metrics,
         metric_source=source, metric_scope=scope, usual_threshold=decision_threshold(disease, model_name),
-        metric_caveat=(f"Specificity with the same inputs left blank: {profile['test']['specificity'] * 100:.1f}%."
-                       + low_specificity_caveat(disease, profile)) if profile else "",
         # A session screening has no saved record, so there is no review status to print.
         status=None, audience="doctor" if doctor else "patient", name="" if doctor else current_user()["name"],
         factors=identify_risk_factors(disease, values), track=track),
@@ -1060,7 +1047,7 @@ def render_predictor(disease: str) -> bool:
             st.subheader("Your result: model input sensitivity")
             st.caption(caveat)
         try:
-            local = individual_sensitivity(result_pipeline, values, stats)
+            local = individual_sensitivity(result_pipeline, model_row(disease, values), stats)
             if doctor:  # read like the Clinical Dashboard: no rows whose entry equals the typical value once rounded
                 local = [(f, shown_value(f, v, stats[f]), shown_value(f, r, stats[f]), d) for f, v, r, d in local]
                 local = [row for row in local if row[1] != row[2]]
@@ -1086,10 +1073,10 @@ def render_predictor(disease: str) -> bool:
         with st.expander("View entered information"):
             if doctor:  # Male/Female, No/Yes and rounded numbers, as in the Clinical Dashboard value table
                 optional = OPTIONAL_INPUTS.get(disease, [])
-                st.dataframe(pd.DataFrame({"Input": [pretty_label(f) for f in feature_list],
+                st.dataframe(pd.DataFrame({"Input": [pretty_label(f) for f in shown_fields],
                                            "Value": [shown_value(f, values.get(f), stats[f],
                                                                  OPTIONAL_BLANK if f in optional else "Not provided")
-                                                     for f in feature_list]}),
+                                                     for f in shown_fields]}),
                              hide_index=True, width="stretch")
             else:
                 summary = input_frame.T.rename(columns={0: "Entered Value"})
@@ -1105,7 +1092,9 @@ def render_predictor(disease: str) -> bool:
         with history_tab[0]:
             from ahead.storage import load_screenings
             from ahead.visuals import trend
-            prior = [r for r in load_screenings(st.session_state.user['id']) if r['disease']==disease and r['model']==model_name]
+            # same_series: a score from a retired model of the same name (another saved threshold) is not comparable.
+            shown_series = {'disease': disease, 'model': model_name, 'threshold': threshold}
+            prior = [r for r in load_screenings(st.session_state.user['id']) if same_series(r, shown_series)]
             if len(prior)>1:
                 frame=pd.DataFrame([{'Date':r['created_at'],'Model score (%)':r['score']*100} for r in reversed(prior)])
                 trend(frame,'Date','Model score (%)','Saved results · same disease and model')

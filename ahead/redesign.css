@@ -192,6 +192,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible 
 .result-card {border-radius:22px!important;box-shadow:var(--ahead-shadow);}
 .result-elevated {border-inline-start:5px solid var(--ahead-danger)!important;}
 .result-lower {border-inline-start:5px solid var(--ahead-success)!important;}
+.result-neutral {border-inline-start:5px solid var(--ahead-muted)!important;}
 [data-testid="stDataFrame"] {border-radius:16px;overflow:hidden;border:1px solid var(--ahead-border);}
 @keyframes ring-entry {from {stroke-dashoffset:100;} to {stroke-dashoffset:var(--ring-offset);}}
 @keyframes progress-entry {from {transform:scaleX(0);} to {transform:scaleX(1);}}

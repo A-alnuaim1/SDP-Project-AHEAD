@@ -16,6 +16,14 @@ from ahead.resources import best_model, features, final_metrics, load_dataset, m
 from ahead.theme import show_chart, style_figure, tokens
 from ahead.visuals import summary_tile
 
+# What a positive training label means, in plain words (models/model_meta.json has the full definitions).
+OUTCOMES = {
+    "diabetes": ("HbA1c under 5.7%", "HbA1c 5.7% or more", "had an HbA1c of 5.7% or more at the exam"),
+    "heart": ("No heart attack reported", "Past heart attack", "reported ever having a heart attack"),
+    "kidney": ("Both tests in the usual range", "eGFR under 60 or ACR 30+", "had an eGFR below 60 or a urine ACR of "
+               "30 mg/g or more at the exam"),
+}
+
 METRIC_COLUMNS = {
     "model": "Algorithm",
     "accuracy": "Accuracy",
@@ -28,12 +36,13 @@ METRIC_COLUMNS = {
 }
 
 
-def _target_figure(dataset: pd.DataFrame, target: str) -> go.Figure:
-    # Targets are stored as 0/1 or No/Yes; either way the positive class means the record has the condition.
+def _target_figure(dataset: pd.DataFrame, target: str, disease: str) -> go.Figure:
+    # Targets are stored as 0/1 or No/Yes; either way the positive class is the training label (OUTCOMES).
     has = dataset[target].astype(str).isin(["1", "Yes"])
-    counts = pd.DataFrame({"Outcome": ["Without", "With"], "Count": [int((~has).sum()), int(has.sum())]})
-    figure = px.bar(counts, x="Outcome", y="Count", title="Records by outcome", text_auto=".3s")
-    figure.update_traces(marker_color=[tokens()["accent"], "#C9706E"], hovertemplate="%{x} the condition: %{y:,}<extra></extra>")
+    negative, positive, _ = OUTCOMES[disease]
+    counts = pd.DataFrame({"Outcome": [negative, positive], "Count": [int((~has).sum()), int(has.sum())]})
+    figure = px.bar(counts, x="Outcome", y="Count", title="Records by training label", text_auto=".3s")
+    figure.update_traces(marker_color=[tokens()["accent"], "#C9706E"], hovertemplate="%{x}: %{y:,}<extra></extra>")
     style_figure(figure, height=330)
     figure.update_layout(xaxis_title="", yaxis_title="")
     return figure
@@ -71,8 +80,11 @@ def _threshold_figure(rows: list, chosen: float) -> go.Figure:
     frame = pd.DataFrame(rows)
     t = tokens()
     figure = go.Figure()
-    for column, name, colour, dash in [("recall", "Recall", t["accent"], "solid"), ("precision", "Precision", "#8E7CC3", "solid"),
-                                       ("f2", "F2 (recall counts double)", "#C98F1E", "dash")]:
+    lines = [("recall", "Recall (cases caught)", t["accent"], "solid"), ("precision", "Precision", "#8E7CC3", "solid")]
+    # Thresholds are chosen by Youden's J (train_model.py); older metadata without specificity falls back to F2.
+    lines.append(("specificity", "Specificity (no false alarm)", "#C98F1E", "dash") if "specificity" in frame
+                 else ("f2", "F2 (recall counts double)", "#C98F1E", "dash"))
+    for column, name, colour, dash in lines:
         figure.add_trace(go.Scatter(x=frame["threshold"], y=frame[column], name=name, mode="lines",
                                     line=dict(color=colour, width=3, dash=dash, shape="spline"),
                                     hovertemplate=f"{name}: %{{y:.0%}}<extra></extra>"))
@@ -96,8 +108,8 @@ def _model_comparison(disease: str) -> None:
         return
     section_heading(
         "Algorithm Comparison",
-        "Validation-set performance of every model family at the default 0.5 cut-off (the tuned threshold "
-        "above applies only to the recommended model's final test metrics).",
+        "Validation-set performance of every model family at the default 0.5 cut-off. When screening, each "
+        "model flags at its own threshold tuned on the validation set, so these figures are lower than in use.",
     )
     frame = pd.DataFrame(rows)
     columns = [c for c in METRIC_COLUMNS if c in frame.columns]
@@ -134,8 +146,8 @@ def render_analytics() -> None:
             positive = details.get("positive_cases", 0)
             share = 100 * positive / max(details.get("n_samples", 1), 1)
             tiles = [("records", "Records", f"{len(dataset):,}", "Rows in the reference dataset", "#0E9AA7", "uploads"),
-                     ("positive", "Positive cases", f"{positive:,}", f"{share:.1f}% of records have the condition", "#C9706E", "flagged"),
-                     ("features", "Model features", len(model_features), "Inputs the screening form asks for", "#8E7CC3", "review"),
+                     ("positive", "Positive cases", f"{positive:,}", f"{share:.1f}% {OUTCOMES[disease][2]}", "#C9706E", "flagged"),
+                     ("features", "Model features", len(model_features), "Answers the model reads", "#8E7CC3", "review"),
                      # Spaced model names wrap between words instead of being cut off in a narrow card.
                      ("model", "Recommended model", model_label(best_model(disease)),
                       "Chosen on the validation results", "#2E9477", "scored")]
@@ -143,14 +155,21 @@ def render_analytics() -> None:
                 with column:
                     summary_tile(f"analytics_{disease}_{key}", label, value, note, colour, icon)
 
-            section_heading("Explore the data", "How many records have the condition, and how each screening input is spread across the dataset.")
+            # Where the data comes from and what the label means, in the training script's own words.
+            st.caption(" ".join(text for text in (
+                f"Source: {details['data_source']}" if details.get("data_source") else "",
+                f"Label: {details['label_definition']}" if details.get("label_definition") else "",
+                f"Population: {details['population']}" if details.get("population") else "",
+                details.get("split", {}).get("method", "")) if text) + " docs/data_sources.md describes how the "
+                "data was checked and its limitations.")
+            section_heading("Explore the data", "How many records have the positive training label, and how each model input is spread across the dataset.")
             # The picker gets its own row above the charts, so both charts start at the same height.
             selected_feature = st.columns(2)[0].selectbox(
                 "Input to explore", model_features, format_func=pretty_label, key=f"explorer_{disease}",
             )
             left, right = st.columns(2)
             with left:
-                show_chart(_target_figure(dataset, target))
+                show_chart(_target_figure(dataset, target, disease))
             with right:
                 show_chart(_feature_figure(disease, selected_feature))
 
@@ -169,12 +188,14 @@ def render_analytics() -> None:
             threshold = float(details.get("decision_threshold", 0.5))
             selection = METRIC_COLUMNS.get(details.get("selection_metric", ""), details.get("selection_metric", ""))
             st.caption(f"The recommended model flags a result when its score reaches {threshold:.0%}. "
-                       f"It was picked from the model families by {selection} on the validation split.")
+                       + (details["selection_rule"] if details.get("selection_rule") else
+                          f"It was picked from the model families by {selection} on the validation split."))
 
             if details.get("threshold_results"):
                 show_chart(_threshold_figure(details["threshold_results"], threshold))
-                st.caption(f"A higher threshold flags fewer people: precision rises and recall falls. {threshold:.0%} is where F2, "
-                           "which counts recall twice as much as precision, peaks on the validation split.")
+                st.caption(f"A higher threshold flags fewer people: precision and specificity rise and recall falls. "
+                           f"{threshold:.0%} is where recall plus specificity (Youden's J) peaks on the validation split, "
+                           "so missed cases and false alarms count the same.")
 
             _model_comparison(disease)
 

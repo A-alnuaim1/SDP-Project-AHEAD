@@ -16,17 +16,19 @@ from streamlit.testing.v1 import AppTest
 
 import ahead.pages.assistant as assistant
 import ahead.pages.doctor_intelligence as page
-from ahead.config import REQUIRED_FOR_SCORE
 from ahead.platform_data import grant_doctor, init_platform, local_today, save_plan
 from ahead.storage import connection, init_db, save_screening
 from ahead.triage import ADULTS_ONLY, LAB_TESTS, RULES, entered_later, missing_tests
 
 APP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app.py')
 BLANKS = (None, '', '   ', float('nan'), 'nan')
-HBA1C = {'features': ['HbA1c_level'], 'label': 'HbA1c', 'action': 'ask for an HbA1c test',
-         'line': 'HbA1c not entered · ask for an HbA1c test',
-         'doctor': 'HbA1c not entered: the model used a typical value. Ask for an HbA1c test.'}
-KIDNEY = {'Age': 50, 'GFR': 80, 'ACR': 10, 'SerumCreatinine': 1.0}   # the tests a kidney score needs, entered
+HBA1C = {'features': ['HbA1c_level'], 'label': 'HbA1c', 'action': 'ask for an HbA1c test to confirm',
+         'line': 'HbA1c not entered · ask for an HbA1c test to confirm',
+         'doctor': 'HbA1c not entered. Ask for an HbA1c test to confirm.'}
+KIDNEY = {'age': 50, 'gender': 'Female', 'egfr': 80, 'uacr': 10, 'creatinine': 1.0}   # the kidney tests, entered
+EGFR_LINE = 'Creatinine and eGFR not entered · ask for a creatinine (eGFR) blood test'
+ACR_LINE = 'Urine ACR not entered · ask for a urine ACR test'
+BP_LINE = "Blood pressure not entered · check the patient's blood pressure"
 
 
 def lines(disease, values, later=()):
@@ -38,29 +40,29 @@ class HelperTests(unittest.TestCase):
         for blank in BLANKS:
             self.assertEqual(missing_tests('diabetes', {'age': 50, 'HbA1c_level': blank, 'blood_glucose_level': blank}), [{
                 'features': ['HbA1c_level', 'blood_glucose_level'], 'label': 'HbA1c and blood glucose',
-                'action': 'ask for an HbA1c test', 'line': 'HbA1c and blood glucose not entered · ask for an HbA1c test',
-                'doctor': 'HbA1c and blood glucose not entered: the model used typical values. Ask for an HbA1c test.'}])
+                'action': 'ask for an HbA1c test to confirm',
+                'line': 'HbA1c and blood glucose not entered · ask for an HbA1c test to confirm',
+                'doctor': 'HbA1c and blood glucose not entered. Ask for an HbA1c test to confirm.'}])
 
     def test_diabetes_hba1c_blank_alone(self):
         for blank in BLANKS:
             self.assertEqual(missing_tests('diabetes', {'HbA1c_level': blank, 'blood_glucose_level': 120}), [HBA1C])
 
-    def test_diabetes_only_glucose_blank_asks_for_a_glucose_test_not_hba1c(self):
-        self.assertEqual(missing_tests('diabetes', {'HbA1c_level': 6.1, 'blood_glucose_level': None}), [{
-            'features': ['blood_glucose_level'], 'label': 'Blood glucose', 'action': 'ask for a blood glucose test',
-            'line': 'Blood glucose not entered · ask for a blood glucose test',
-            'doctor': 'Blood glucose not entered: the model used a typical value. Ask for a blood glucose test.'}])
+    def test_diabetes_with_hba1c_entered_asks_for_nothing_more(self):
+        # The measured HbA1c sets the track, so a blank glucose is no longer a test to ask for (the separate
+        # blood glucose ask was removed when the lab values stopped being model inputs).
+        self.assertEqual(missing_tests('diabetes', {'HbA1c_level': 6.1, 'blood_glucose_level': None}), [])
 
     def test_entered_labs_ask_for_nothing(self):
         self.assertEqual(missing_tests('diabetes', {'HbA1c_level': 6.1, 'blood_glucose_level': 140}), [])
         self.assertEqual(missing_tests('diabetes', {'HbA1c_level': '6.1', 'blood_glucose_level': ' 140 '}), [])
-        self.assertEqual(missing_tests('kidney', {**KIDNEY, 'HbA1c': 5.5, 'FastingBloodSugar': 95,
-                                                  'SystolicBP': 130, 'DiastolicBP': 85}), [])
+        self.assertEqual(missing_tests('kidney', {**KIDNEY, 'systolic_bp': 130, 'diastolic_bp': 85}), [])
 
     def test_a_value_counts_as_blank_only_when_the_saved_inputs_include_it(self):
         # An older record saved without its inputs, or with only some of them, asks for nothing it did not ask about.
         for values in (None, {}, '', '{}', 'not json', '[1, 2]', {'age': 30}):
             self.assertEqual(missing_tests('diabetes', values), [])
+            self.assertEqual(missing_tests('kidney', values), [])
         self.assertEqual(missing_tests('diabetes', {'age': 30, 'HbA1c_level': None}), [HBA1C])
 
     def test_saved_json_text_reads_like_the_dict(self):
@@ -68,98 +70,118 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(missing_tests('diabetes', saved), [HBA1C])
 
     def test_kidney_blood_pressure_is_one_line(self):
-        self.assertEqual(lines('kidney', {**KIDNEY, 'HbA1c': 5.5, 'FastingBloodSugar': 95, 'SystolicBP': None,
-                                          'DiastolicBP': ''}),
-                         ["Blood pressure not entered · check the patient's blood pressure"])
-        self.assertEqual(missing_tests('kidney', {**KIDNEY, 'SystolicBP': None, 'DiastolicBP': None})[0]['doctor'],
-                         "Blood pressure not entered: the model used typical values. Check the patient's blood pressure.")
+        self.assertEqual(lines('kidney', {**KIDNEY, 'systolic_bp': None, 'diastolic_bp': ''}), [BP_LINE])
+        self.assertEqual(missing_tests('kidney', {**KIDNEY, 'systolic_bp': None, 'diastolic_bp': None})[0]['doctor'],
+                         "Blood pressure not entered. Check the patient's blood pressure.")
         # Half a reading names the number that is missing.
-        self.assertEqual(lines('kidney', {**KIDNEY, 'SystolicBP': 135, 'DiastolicBP': None}),
+        self.assertEqual(lines('kidney', {**KIDNEY, 'systolic_bp': 135, 'diastolic_bp': None}),
                          ["Diastolic blood pressure not entered · check the patient's blood pressure"])
-        self.assertEqual(lines('kidney', {**KIDNEY, 'SystolicBP': float('nan'), 'DiastolicBP': 85}),
+        self.assertEqual(lines('kidney', {**KIDNEY, 'systolic_bp': float('nan'), 'diastolic_bp': 85}),
                          ["Systolic blood pressure not entered · check the patient's blood pressure"])
 
-    def test_kidney_sugar_labs_merge_like_diabetes_and_come_before_blood_pressure(self):
-        self.assertEqual(lines('kidney', {**KIDNEY, 'HbA1c': None, 'FastingBloodSugar': None, 'SystolicBP': None,
-                                          'DiastolicBP': None}),
-                         ['HbA1c and fasting blood sugar not entered · ask for an HbA1c test',
-                          "Blood pressure not entered · check the patient's blood pressure"])
-        self.assertEqual(lines('kidney', {**KIDNEY, 'HbA1c': None, 'FastingBloodSugar': 95}),
-                         ['HbA1c not entered · ask for an HbA1c test'])
-        self.assertEqual(lines('kidney', {**KIDNEY, 'HbA1c': 5.5, 'FastingBloodSugar': None}),
-                         ['Fasting blood sugar not entered · ask for a fasting blood sugar test'])
+    def test_kidney_asks_for_the_blood_test_and_the_urine_test(self):
+        blank = {'age': 50, 'gender': 'Male', 'creatinine': None, 'egfr': None, 'uacr': None, 'systolic_bp': None,
+                 'diastolic_bp': None}
+        self.assertEqual(lines('kidney', blank), [EGFR_LINE, ACR_LINE, BP_LINE])
+        self.assertEqual(missing_tests('kidney', blank)[0]['doctor'],
+                         'Creatinine and eGFR not entered. Ask for a creatinine (eGFR) blood test.')
+        self.assertEqual(missing_tests('kidney', blank)[1]['doctor'], 'Urine ACR not entered. Ask for a urine ACR test.')
+        # Creatinine alone gives eGFR (CKD-EPI 2021), so only the urine test is left to ask for.
+        self.assertEqual(lines('kidney', {**blank, 'creatinine': 1.1, 'systolic_bp': 120, 'diastolic_bp': 80}),
+                         [ACR_LINE])
+        # A lab eGFR with no creatinine is enough too; an ACR alone still asks for the blood test.
+        self.assertEqual(lines('kidney', {**blank, 'egfr': 75, 'uacr': 12, 'systolic_bp': 120, 'diastolic_bp': 80}), [])
+        self.assertEqual(lines('kidney', {**blank, 'uacr': 12, 'systolic_bp': 120, 'diastolic_bp': 80}), [EGFR_LINE])
+        # Creatinine without an age or sex cannot give eGFR, so the blood test is still asked for, named by eGFR.
+        self.assertEqual(lines('kidney', {**blank, 'age': None, 'creatinine': 1.1, 'uacr': 12, 'systolic_bp': 120,
+                                          'diastolic_bp': 80}),
+                         ['eGFR not entered · ask for a creatinine (eGFR) blood test'])
 
-    def test_the_tests_a_kidney_score_needs_and_heart_ask_for_nothing(self):
-        # A screening without eGFR or ACR gets no score and is not saved, so these are never a test to ask for here.
-        self.assertEqual(missing_tests('kidney', {'Age': 50, 'GFR': None, 'ACR': '', 'SerumCreatinine': None}), [])
+    def test_an_older_kidney_screening_asks_with_its_own_keys(self):
+        # Saved before the switch to NHANES: GFR/ACR/SerumCreatinine were needed for a score, so they are entered; a
+        # blank blood pressure still asks. Its blank HbA1c and fasting sugar no longer do (those rules were removed).
+        legacy = {'Age': 50, 'GFR': 80, 'ACR': 10, 'SerumCreatinine': 1.0, 'HbA1c': None, 'FastingBloodSugar': None,
+                  'SystolicBP': None, 'DiastolicBP': None}
+        self.assertEqual(lines('kidney', legacy), [BP_LINE])
+        self.assertEqual(lines('kidney', {**legacy, 'SystolicBP': 130, 'DiastolicBP': 80}), [])
+
+    def test_heart_asks_for_nothing(self):
         self.assertEqual(missing_tests('heart', {'BMI': None, 'AgeCategory': '', 'PhysicalHealthDays': None}), [])
         with self.assertRaises(ValueError):
             missing_tests('liver', {})
 
     def test_the_table_covers_every_urgent_rule_value_a_screening_can_leave_blank(self):
         for disease, rules in RULES.items():
-            values = {rule.feature for rule in rules if rule.kind != ADULTS_ONLY} - set(REQUIRED_FOR_SCORE.get(disease, ()))
+            values = {rule.feature for rule in rules if rule.kind != ADULTS_ONLY}
             tests = LAB_TESTS[disease]
-            self.assertEqual({f for test in tests for f in test.asks}, values, disease)
-            self.assertEqual({f for test in tests for f in test.covers}, values, disease)
+            self.assertEqual({f for test in tests for f in test.asks}, values - {'blood_glucose_level'}, disease)
+            self.assertLessEqual(values, {f for test in tests for f in test.covers}, disease)
             for test in tests:
                 self.assertTrue(set(test.asks) <= set(test.covers), test)
-            # Every value blank on its own gets exactly one test, and every value is named by some test.
-            for feature in values:
+            # Every asking value blank on its own gets exactly one test.
+            for feature in {f for test in tests for f in test.asks}:
                 self.assertEqual([t['features'] for t in missing_tests(disease, {feature: None})], [[feature]])
 
     def test_a_screening_under_18_asks_for_nothing(self):
         # The tests come from adult cut-offs; a flagged child is urgent, and its reason already asks for tests.
         for age in (6, 17.9, '12'):
             self.assertEqual(missing_tests('diabetes', {'age': age, 'HbA1c_level': None, 'blood_glucose_level': None}), [])
-        self.assertEqual(missing_tests('kidney', {**KIDNEY, 'Age': 15, 'HbA1c': None, 'FastingBloodSugar': None,
-                                                  'SystolicBP': None, 'DiastolicBP': None}), [])
+        self.assertEqual(missing_tests('kidney', {'age': 15, 'egfr': None, 'uacr': None, 'creatinine': None,
+                                                  'systolic_bp': None, 'diastolic_bp': None}), [])
+        self.assertEqual(missing_tests('kidney', {'Age': 15, 'GFR': None, 'SystolicBP': None}), [])   # older keys
         # 18, or an age left blank or not saved, still asks.
         for age in (18, 40, None, ''):
             self.assertEqual(missing_tests('diabetes', {'age': age, 'HbA1c_level': None, 'blood_glucose_level': 120}), [HBA1C])
         self.assertEqual(missing_tests('diabetes', {'HbA1c_level': None}), [HBA1C])
-        self.assertEqual(lines('kidney', {**KIDNEY, 'Age': 18, 'HbA1c': None}), ['HbA1c not entered · ask for an HbA1c test'])
+        self.assertEqual(lines('kidney', {**KIDNEY, 'age': 18, 'uacr': None}), [ACR_LINE])
 
     def test_a_value_a_newer_screening_entered_is_not_asked_for(self):
         both = {'age': 50, 'HbA1c_level': None, 'blood_glucose_level': None}
         self.assertEqual(missing_tests('diabetes', both, {'HbA1c_level', 'blood_glucose_level'}), [])
-        # HbA1c done since, glucose still blank: the glucose test, no longer folded into an HbA1c ask.
-        self.assertEqual(lines('diabetes', both, {'HbA1c_level'}), ['Blood glucose not entered · ask for a blood glucose test'])
+        # HbA1c done since: nothing left to ask for, since a blank glucose alone asks for nothing.
+        self.assertEqual(lines('diabetes', both, {'HbA1c_level'}), [])
         self.assertEqual(lines('diabetes', both, ['blood_glucose_level']), [HBA1C['line']])
-        self.assertEqual(lines('diabetes', both, ()), ['HbA1c and blood glucose not entered · ask for an HbA1c test'])
+        self.assertEqual(lines('diabetes', both, ()), ['HbA1c and blood glucose not entered · ask for an HbA1c test to confirm'])
         # One blood pressure number taken since names the other one.
-        self.assertEqual(lines('kidney', {**KIDNEY, 'SystolicBP': None, 'DiastolicBP': None}, {'SystolicBP'}),
+        self.assertEqual(lines('kidney', {**KIDNEY, 'systolic_bp': None, 'diastolic_bp': None}, {'systolic_bp'}),
                          ["Diastolic blood pressure not entered · check the patient's blood pressure"])
 
     def test_entered_later_collects_newer_values_per_patient_and_condition(self):
         rows = [  # newest first, as the pages read them
+            {'id': 6, 'owner_id': 1, 'disease': 'kidney', 'values_json': {'age': 50, 'gender': 'Male', 'creatinine': 1.0}},
             {'id': 5, 'owner_id': 1, 'disease': 'diabetes', 'values_json': json.dumps({'HbA1c_level': 5.6, 'blood_glucose_level': None})},
             {'id': 4, 'owner_id': 2, 'disease': 'diabetes', 'values_json': {'blood_glucose_level': 110}},
-            {'id': 3, 'owner_id': 1, 'disease': 'kidney', 'values_json': {'HbA1c': 5.5}},
+            {'id': 3, 'owner_id': 1, 'disease': 'kidney', 'values_json': {'GFR': 55}},
             {'id': 2, 'owner_id': 1, 'disease': 'diabetes', 'values_json': {'blood_glucose_level': 140, 'age': float('nan')}},
             {'id': 1, 'owner_id': 1, 'disease': 'diabetes', 'values_json': 'not json'},
         ]
-        self.assertEqual(entered_later(rows), {5: set(), 4: set(), 3: set(), 2: {'HbA1c_level'},
-                                               1: {'HbA1c_level', 'blood_glucose_level'}})
+        later = entered_later(rows)
+        self.assertEqual({k: v for k, v in later.items() if k != 3}, {
+            6: set(), 5: set(), 4: set(), 2: {'HbA1c_level'}, 1: {'HbA1c_level', 'blood_glucose_level'}})
+        # An eGFR worked out from a newer screening's creatinine counts as entered, under the current name.
+        self.assertLessEqual({'egfr', 'creatinine', 'age'}, later[3])
+        self.assertEqual(lines('kidney', {'GFR': None, 'ACR': 12}, later[3]), [])
         # Another patient's or another condition's screening clears nothing.
-        self.assertEqual(missing_tests('diabetes', {'HbA1c_level': None, 'blood_glucose_level': None}, entered_later(rows)[2]),
-                         [{'features': ['blood_glucose_level'], 'label': 'Blood glucose', 'action': 'ask for a blood glucose test',
-                           'line': 'Blood glucose not entered · ask for a blood glucose test',
-                           'doctor': 'Blood glucose not entered: the model used a typical value. Ask for a blood glucose test.'}])
+        self.assertEqual(missing_tests('diabetes', {'HbA1c_level': None, 'blood_glucose_level': None}, later[4]),
+                         [{'features': ['HbA1c_level', 'blood_glucose_level'], 'label': 'HbA1c and blood glucose',
+                           'action': 'ask for an HbA1c test to confirm',
+                           'line': 'HbA1c and blood glucose not entered · ask for an HbA1c test to confirm',
+                           'doctor': 'HbA1c and blood glucose not entered. Ask for an HbA1c test to confirm.'}])
         self.assertEqual(entered_later([]), {})
 
     def test_wording_is_plain_and_the_line_and_sentence_agree(self):
-        cases = [('diabetes', {'HbA1c_level': None, 'blood_glucose_level': None}), ('diabetes', {'blood_glucose_level': None}),
-                 ('kidney', {'HbA1c': None, 'FastingBloodSugar': None, 'SystolicBP': None, 'DiastolicBP': None}),
-                 ('kidney', {'FastingBloodSugar': None, 'DiastolicBP': None})]
+        cases = [('diabetes', {'HbA1c_level': None, 'blood_glucose_level': None}), ('diabetes', {'HbA1c_level': None}),
+                 ('kidney', {'creatinine': None, 'egfr': None, 'uacr': None, 'systolic_bp': None, 'diastolic_bp': None}),
+                 ('kidney', {'uacr': None, 'diastolic_bp': None})]
         for disease, values in cases:
             for test in missing_tests(disease, values):
                 self.assertEqual(test['line'], f"{test['label']} not entered · {test['action']}")
-                self.assertTrue(test['doctor'].startswith(f"{test['label']} not entered: the model used "), test)
-                self.assertTrue(test['doctor'].endswith(f"{test['action'][:1].upper()}{test['action'][1:]}."), test)
+                self.assertEqual(test['doctor'], f"{test['label']} not entered. {test['action'][:1].upper()}"
+                                                 f"{test['action'][1:]}.")
                 for text in test.values():
                     if isinstance(text, str):
-                        self.assertNotRegex(text, r'_|\byou\b|\byour\b|[Dd]iagnos')
+                        # No longer says the model used a typical value: labs are not model inputs.
+                        self.assertNotRegex(text, r'_|\byou\b|\byour\b|[Dd]iagnos|typical')
 
 
 class RemovedTabTests(unittest.TestCase):
@@ -223,8 +245,8 @@ class RecordViewTests(Fixture):
         done = self.screening(self.p, 'diabetes', .6, {**at_risk, 'blood_glucose_level': None}, days_ago=5)
         older = self.screening(self.p, 'diabetes', .4, {}, days_ago=4)   # saved before inputs were kept
         entered = self.screening(self.p, 'diabetes', .6, {**at_risk, 'HbA1c_level': 6.1}, days_ago=3)
-        kidney = self.screening(self.p, 'kidney', .6, {**KIDNEY, 'HbA1c': None, 'FastingBloodSugar': None,
-                                                      'SystolicBP': None, 'DiastolicBP': None}, days_ago=2)
+        kidney = self.screening(self.p, 'kidney', .6, {**KIDNEY, 'egfr': None, 'creatinine': None, 'uacr': None,
+                                                      'systolic_bp': None, 'diastolic_bp': None}, days_ago=2)
         newest = self.screening(self.p, 'diabetes', .55, at_risk)
         at = self.page('intelligence', intelligence_focus={'tab': 'Patient Records & History', 'patient': self.p['id']})
         records = lambda:self.tab(at, 'Patient Records & History')
@@ -241,10 +263,11 @@ class RecordViewTests(Fixture):
         strip = html.unescape('\n'.join(h.proto.body for h in self.tab(at, 'Prevention Plan').get('html')))
         self.assertIn(f'<p class="track-panel-note">{HBA1C["line"]}</p>', strip)
         self.assertEqual(strip.count('class="track-panel-note"'), 2)
-        # Kidney: the sugar labs merge into one test, then blood pressure, one paragraph each.
+        # Kidney: the blood test, the urine test, then blood pressure, one paragraph each.
         picker().set_value(kidney); self.ok(at.run())
-        self.assertEqual(notes(), ['HbA1c and fasting blood sugar not entered: the model used typical values. Ask for an HbA1c test.\n\n'
-                                   "Blood pressure not entered: the model used typical values. Check the patient's blood pressure."])
+        self.assertEqual(notes(), ['Creatinine and eGFR not entered. Ask for a creatinine (eGFR) blood test.\n\n'
+                                   'Urine ACR not entered. Ask for a urine ACR test.\n\n'
+                                   "Blood pressure not entered. Check the patient's blood pressure."])
         # Every lab entered, or no saved inputs at all: no next-step line.
         picker().set_value(entered); self.ok(at.run())
         self.assertEqual(notes(), [])
@@ -297,8 +320,7 @@ class DoctorHomeTests(Fixture):
         self.screening(self.p, 'diabetes', .55, {'age': 50, 'HbA1c_level': None, 'blood_glucose_level': 120})
         # Urgent by its glucose with HbA1c blank: the row gives the urgent reason and goes to a visit first.
         self.screening(ben, 'diabetes', .8, {'age': 50, 'HbA1c_level': None, 'blood_glucose_level': 250})
-        self.screening(dan, 'kidney', .7, {**KIDNEY, 'HbA1c': None, 'FastingBloodSugar': 95, 'SystolicBP': None,
-                                           'DiastolicBP': None})
+        self.screening(dan, 'kidney', .7, {**KIDNEY, 'uacr': None, 'systolic_bp': None, 'diastolic_bp': None})
         # Missed doses only: a 00:00 dose is already due, so unlogged it is missed today whatever the time of the run.
         save_plan(self.d['id'], cara['id'], {'name': 'Metformin', 'dosage': '500 mg', 'instructions': '', 'times': ['00:00'],
                   'days': list(range(7)), 'start_date': (local_today() - timedelta(days=1)).isoformat(),
@@ -307,8 +329,7 @@ class DoctorHomeTests(Fixture):
         rows = self.rows(at)
         self.assertEqual(rows['Alice Mansour'][1:], [HBA1C['line']])
         self.assertRegex(rows['Alice Mansour'][0], r'^Diabetes · 55% · today \d\d:\d\d$')
-        self.assertEqual(rows['Dan Kidney'][1:], ['HbA1c not entered · ask for an HbA1c test',
-                                                 "Blood pressure not entered · check the patient's blood pressure"])
+        self.assertEqual(rows['Dan Kidney'][1:], [ACR_LINE, BP_LINE])
         self.assertEqual(len(rows['Ben Cole']), 2)
         self.assertIn('blood glucose of 250 mg/dL', rows['Ben Cole'][1])
         self.assertNotIn('not entered', ' '.join(rows['Ben Cole']))
@@ -323,18 +344,17 @@ class DoctorHomeTests(Fixture):
         # Alice had both tests since; her newer result is not flagged, so the older at-risk result still leads the row.
         self.screening(self.p, 'diabetes', .55, blank, days_ago=2)
         self.screening(self.p, 'diabetes', .30, {**blank, 'HbA1c_level': 5.6, 'blood_glucose_level': 110})
-        # Ben had the HbA1c test only: the row now asks for the glucose test on its own.
+        # Ben had the HbA1c test only: a blank glucose alone asks for nothing, so his row names no test.
         self.screening(ben, 'diabetes', .55, blank, days_ago=2)
         self.screening(ben, 'diabetes', .30, {**blank, 'HbA1c_level': 5.6})
         # Cara's newer screening is for another condition, so it clears nothing.
         self.screening(cara, 'diabetes', .55, {**blank, 'blood_glucose_level': 120}, days_ago=2)
-        self.screening(cara, 'kidney', .30, {**KIDNEY, 'HbA1c': 5.5, 'FastingBloodSugar': 95, 'SystolicBP': 120,
-                                             'DiastolicBP': 80})
+        self.screening(cara, 'kidney', .30, {**KIDNEY, 'systolic_bp': 120, 'diastolic_bp': 80})
         at = self.page('overview')
         rows = self.rows(at)
         self.assertRegex(rows['Alice Mansour'][0], r'^Diabetes · 55% · ')
         self.assertEqual(rows['Alice Mansour'][1:], [])
-        self.assertEqual(rows['Ben Cole'][1:], ['Blood glucose not entered · ask for a blood glucose test'])
+        self.assertEqual(rows['Ben Cole'][1:], [])
         self.assertEqual(rows['Cara Diaz'][1:], [HBA1C['line']])
         # The record view the row opens and the Prevention Plan strip agree: nothing left to ask Alice for.
         at = self.page('intelligence', intelligence_focus={'tab': 'Patient Records & History', 'patient': self.p['id']})

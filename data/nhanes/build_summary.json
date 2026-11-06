@@ -1,0 +1,47 @@
+{
+  "source": "data/nhanes/nhanes_1999_2023_research.csv.gz",
+  "test_cycle": "2021-2023",
+  "diabetes": {
+    "splits": {
+      "train_and_validation": {
+        "rows": 48937,
+        "positive": 12504,
+        "positive_rate": 0.2555
+      },
+      "test": {
+        "rows": 4966,
+        "positive": 1402,
+        "positive_rate": 0.2823
+      },
+      "all": {
+        "rows": 53903,
+        "positive": 13906,
+        "positive_rate": 0.258
+      }
+    },
+    "ada_comparison": {
+      "score": "Partial ADA risk test points (Bang et al. 2009): age, sex, high blood pressure, physical activity, BMI. No family history or gestational diabetes; blank answers score 0.",
+      "test_rows": 4966,
+      "roc_auc": 0.7219
+    }
+  },
+  "kidney": {
+    "splits": {
+      "train_and_validation": {
+        "rows": 54845,
+        "positive": 9210,
+        "positive_rate": 0.1679
+      },
+      "test": {
+        "rows": 5551,
+        "positive": 948,
+        "positive_rate": 0.1708
+      },
+      "all": {
+        "rows": 60396,
+        "positive": 10158,
+        "positive_rate": 0.1682
+      }
+    }
+  }
+}

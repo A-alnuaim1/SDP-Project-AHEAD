@@ -8,15 +8,16 @@ from html import escape
 import pandas as pd
 import streamlit as st
 
-from ahead.clinical_data import dob_age, issue_text, prepare_upload, shown_value, validate_row
+from ahead.clinical_data import (dob_age, field_info, issue_text, model_frame, prepare_upload, shown_value,
+                                  validate_row)
 from ahead.visuals import summary_tile
 from ahead.components import (current_user, empty_state, markdown_literal, model_label, model_selector, page_header, result_card,
                               section_heading, track_panel)
-from ahead.config import DISEASES, pretty_label
+from ahead.config import AGE_FIELD, DISEASES, GATE_ONLY_FIELDS, OPTIONAL_INPUTS, form_fields, is_legacy, pretty_label
 from ahead.reports import patient_report
-from ahead.resources import feature_summary, features, final_metrics, predict_probability, validation_results, best_model
+from ahead.resources import feature_summary, features, model_test_metrics, predict_probability
 from ahead.storage import insert_records, list_records, save_scoring_run, update_record
-from ahead.screening import identify_risk_factors, individual_sensitivity
+from ahead.screening import identify_risk_factors, individual_sensitivity, model_row
 from ahead.platform_data import append_record_prediction, record_prediction_history, to_local
 from ahead.triage import TRACKS, track_text, triage_saved
 
@@ -26,6 +27,14 @@ SOURCES = {"batch": "Cohort scoring", "corrected": "Corrected record"}
 # A datetime column (not preformatted text) so a header click sorts chronologically.
 LOCAL_TIME = {"Date": st.column_config.DatetimeColumn(format="D MMM YYYY, HH:mm")}
 TRACK_LABELS = [track_text(track, "doctor")["label"] for track in TRACKS]   # Urgent, At risk, Not flagged, No score
+LEGACY_NOTE = ("This record was saved with an earlier version of this condition's form. It keeps its saved values, "
+               "score and track; the current model never re-scores it. Upload it again in the current format to score "
+               "it with the current model.")
+
+
+def _legacy(record, disease):
+    """A record saved with the condition's earlier form (config.LEGACY_FIELDS): shown and sorted, never re-scored."""
+    return is_legacy(disease, json.loads(record["values_json"]))
 
 
 def _when(stamp):
@@ -105,18 +114,30 @@ def _upload():
     return frame, hashlib.sha256(raw).hexdigest()[:16], file.name[:120]
 
 
-def _intake(owner_id, disease, required, stats):
-    section_heading("1 · Import and check records", "Age may be omitted at upload. Provide DOB to calculate it, "
-                    "or enter age during individual review.")
-    with st.expander("Required model columns"):
-        st.code(", ".join(required), language=None)
-    age_key = "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
-    example = {"PatientID": "DEMO-001", "DOB": "1980-01-01"}
+def example_row(disease, required, stats):
+    """The example upload template's row: typical answers, and the optional labs and readings blank (a typical lab value
+    is in the usual range, so it would set every row to Not flagged and the template would never show the model's
+    flag). The heart history questions keep their 'No' default."""
+    age_key, example = AGE_FIELD[disease], {"PatientID": "DEMO-001", "DOB": "1980-01-01"}
     for field in required:
-        if field != age_key:
+        if field in OPTIONAL_INPUTS.get(disease, []) and field not in GATE_ONLY_FIELDS.get(disease, ()):
+            example[field] = ""
+        elif field != age_key:
             info = stats[field]
             example[field] = info["default"] if info["kind"] == "category" else (
                 info["mode"] if info["binary"] else round(info["median"], 2))
+    return example
+
+
+def _intake(owner_id, disease, required, stats):
+    section_heading("1 · Import and check records", "Age may be omitted at upload. Provide DOB to calculate it, "
+                    "or enter age during individual review.")
+    optional = [f for f in required if f in OPTIONAL_INPUTS.get(disease, [])]
+    with st.expander("Upload columns"):
+        st.code(", ".join(f for f in required if f not in optional), language=None)
+        if optional:
+            st.caption("Optional columns (a blank cell, or no column, means not provided): " + ", ".join(optional))
+    example = example_row(disease, required, stats)
     st.download_button("Download example upload template", pd.DataFrame([example]).to_csv(index=False).encode(),
                        file_name=f"ahead_{disease}_template.csv", mime="text/csv")
     frame, fingerprint, name = _upload()
@@ -161,7 +182,7 @@ def _edit_record(record, owner_id, disease, required, stats, pipeline, model_nam
         submitted = st.form_submit_button("Save and validate record")
     if submitted:
         incoming = dict(zip(table["Input"], table["Value"]))
-        age_key = "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
+        age_key = AGE_FIELD[disease]
         reference = to_local(record['created_at']).date()
         try:
             old = dob_age(record["dob"], disease, stats, reference)
@@ -175,7 +196,7 @@ def _edit_record(record, owner_id, disease, required, stats, pipeline, model_nam
         clean, issues = validate_row(incoming, disease, required, stats, dob or None, reference)
         if not issues and record['score'] is not None:
             try:
-                score = float(predict_probability(pipeline, pd.DataFrame([clean], columns=required)).iloc[0])
+                score = float(predict_probability(pipeline, model_frame(disease, [clean], features(disease))).iloc[0])
             except (ValueError, TypeError) as error:
                 st.error(f'Could not update the prediction: {error}')
                 return
@@ -243,7 +264,8 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
     records = sorted(groups[cohort], key=lambda r: r["source_row"])
     tracks = {r["id"]: _track(r, disease) for r in records}
     _summary(records, tracks)
-    ready = [r for r in records if not json.loads(r["issues_json"]) and r["status"] not in ("Excluded", "Reviewed")]
+    ready = [r for r in records if not json.loads(r["issues_json"]) and r["status"] not in ("Excluded", "Reviewed")
+             and not _legacy(r, disease)]
     if st.button(f"Score {len(ready)} eligible record{'s' if len(ready) != 1 else ''} with {model_label(model_name)}",
                  disabled=not ready, type="primary"):
         with st.spinner(f"Checking and scoring {len(ready):,} records with {model_label(model_name)}…"):
@@ -252,7 +274,8 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
             valid, scored, error = [(i, clean) for i, clean, issues in checked if not issues], [], None
             if valid:
                 try:
-                    scores = predict_probability(pipeline, pd.DataFrame([clean for _, clean in valid], columns=required))
+                    scores = predict_probability(pipeline, model_frame(disease, [clean for _, clean in valid],
+                                                                       features(disease)))
                     scored = [(i, clean, float(score)) for (i, clean), score in zip(valid, scores)]
                 except (ValueError, TypeError) as failure:
                     error = failure
@@ -287,10 +310,10 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
                    else f"No {status_filter.lower()} records in this upload.")
     else:
         st.dataframe(shown, width="stretch", hide_index=True, height=320)
-    reference = next((m for m in validation_results(disease) if m["model"] == model_name), {})
-    st.info(f"{model_label(model_name)} validation-set recall {reference.get('recall_disease', 0):.1%}, "
-            f"precision {reference.get('precision_disease', 0):.1%} at a 50% threshold. "
-            "These figures may differ at a tuned threshold and on a hospital cohort.")
+    reference = model_test_metrics(disease, model_name)
+    st.info(f"{model_label(model_name)} test-set recall {reference.get('recall_disease', 0):.1%}, "
+            f"precision {reference.get('precision_disease', 0):.1%} at its tuned "
+            f"{reference.get('threshold', threshold) * 100:g}% threshold. These figures may differ on a hospital cohort.")
     safe_export = table.copy()
     for column in ("Patient", "Issues", "Model"):
         safe_export[column] = safe_export[column].map(
@@ -307,28 +330,29 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
     selected_id = st.selectbox("Record", list(by_id), key=key,
                                format_func=lambda i: f"Row {by_id[i]['source_row']} · {by_id[i]['patient_id']} · {_status(by_id[i])}")
     record = by_id[selected_id]
-    issues = json.loads(record["issues_json"])
-    if issues:
+    issues, legacy = json.loads(record["issues_json"]), _legacy(record, disease)
+    if legacy:
+        st.info(LEGACY_NOTE)
+    elif issues:
         st.warning("Correct these inputs before scoring:\n" + "\n".join(f"- {issue_text(i)}" for i in issues))
-    if record["status"] == "Incomplete" or st.toggle("Edit this record", key=f"edit_toggle_{selected_id}"):
+    if not legacy and (record["status"] == "Incomplete" or st.toggle("Edit this record", key=f"edit_toggle_{selected_id}")):
         _edit_record(record, owner_id, disease, required, stats, pipeline, model_name, threshold)
     values, track = json.loads(record["values_json"]), tracks[selected_id]
     if record["score"] is not None:
         result_card(int(record["score"] >= record["threshold"]), record["score"],
                     DISEASES[disease]["long_label"], record["model"], record["threshold"], audience="doctor",
-                    status=_status(record))
+                    status=_status(record), disease=disease, track=track)
         if track:
             track_panel(track, "doctor")
         st.caption("Review the measurements and history independently before acting on this model output.")
-        metrics = final_metrics(disease) if record["model"] == best_model(disease) else next(
-            (m for m in validation_results(disease) if m["model"] == record["model"]), {})
+        metrics = model_test_metrics(disease, record["model"])
         factors = identify_risk_factors(disease, values)
         # The last save of a reviewed or excluded record is the review decision, so its time is the review time.
         decided = record["status"] in ("Reviewed", "Excluded")
         st.download_button("Download patient PDF", patient_report(disease, record["patient_id"], values,
                            record["score"], record["threshold"], record["model"], metrics,
                            record["status"] if decided else "", record["note"],
-                           metric_source="test" if record["model"] == best_model(disease) else "validation",
+                           metric_source="test",
                            audience="doctor", reviewer=current_user()["name"] if decided else "",
                            reviewed_at=record["updated_at"] if decided else None,
                            source=f"{record.get('source_name') or 'Uploaded file'}, row {record['source_row']}", factors=factors,
@@ -338,12 +362,13 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
             # Not "values above typical ranges": the list also holds history answers such as a previous stroke.
             st.caption("Risk factors in this record")
             st.html("".join(f'<span class="factor-chip">{escape(f)}</span>' for f in factors))
-        model_for_record = pipeline if record["model"] == model_name else None
+        model_for_record = pipeline if record["model"] == model_name and not legacy else None
         if model_for_record is not None:
             try:
                 # An entry that reads the same as the typical value once rounded (9.95 vs 9.9515) says nothing here.
                 local = [(f, shown_value(f, v, stats[f]), shown_value(f, base, stats[f]), delta)
-                         for f, v, base, delta in individual_sensitivity(model_for_record, values, stats)]
+                         for f, v, base, delta in individual_sensitivity(model_for_record, model_row(disease, values),
+                                                                         stats)]
                 local = [row for row in local if row[1] != row[2]]
                 if local:
                     st.caption("Illustrative model input sensitivity: one input replaced at a time by a typical training value; not a causal explanation.")
@@ -356,8 +381,9 @@ def _queue(owner_id, disease, pipeline, model_name, threshold, required, stats):
                 st.info("Individual model sensitivity is unavailable for this record.")
     elif track:   # the urgent rules work before scoring; an unscored record with no urgent value draws nothing
         track_panel(track, "doctor", _unchecked(track, issues))
-    st.dataframe(pd.DataFrame({"Input": [pretty_label(f) for f in required],
-                               "Value": [shown_value(f, values.get(f), stats[f]) for f in required]}),
+    shown_fields = list(values) if legacy else required   # an earlier form's record shows its own inputs
+    st.dataframe(pd.DataFrame({"Input": [pretty_label(f) for f in shown_fields],
+                               "Value": [shown_value(f, values.get(f), field_info(stats, f)) for f in shown_fields]}),
                  hide_index=True, width="stretch")
     prediction_history=record_prediction_history(owner_id,selected_id)
     if prediction_history:
@@ -390,7 +416,7 @@ def render_clinical_dashboard():
     if pipeline is None:
         st.error("No trained model is available.")
         return
-    required, stats = features(disease), feature_summary(disease)
+    required, stats = form_fields(disease), feature_summary(disease)   # upload columns: the form's fields
     owner_id = st.session_state.user["id"]
     _intake(owner_id, disease, required, stats)
     _queue(owner_id, disease, pipeline, model_name, threshold, required, stats)

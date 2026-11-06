@@ -5,9 +5,10 @@ import re
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 
-from ahead.config import GENDER_CODED_FIELDS, pretty_label
+from ahead.config import AGE_FIELD, GENDER_CODED_FIELDS, MODEL_INPUTS, OPTIONAL_INPUTS, YES_NO_FIELDS, pretty_label
 
 
 def age_from_dob(value, today=None):
@@ -41,13 +42,67 @@ def dob_age(dob, disease, stats, reference_date=None):
 # and a BMI or serum creatinine near zero is an entry error, not a patient.
 PHYSICAL_LIMITS = {"physicalhealthdays": (0.0, 30.0), "mentalhealthdays": (0.0, 30.0), "sleephours": (1.0, 24.0),
                    "bmi": (10.0, math.inf), "serumcreatinine": (0.2, math.inf)}
-# The doctor's wording for an optional lab left blank, as in Patient Intelligence.
-OPTIONAL_BLANK = "Not provided (the model used a typical value)"
+# The doctor's wording for an optional value left blank, as in Patient Intelligence. Optional values are never model
+# inputs any more (config.MODEL_INPUTS), so nothing is filled in for them.
+OPTIONAL_BLANK = "Not provided"
+
+# smoking_history -> smoked_100 (NHANES: smoked at least 100 cigarettes in life). The diabetes form's older answers
+# 'ever' and 'not current' mean the person has smoked; 'No Info', a blank or anything else is unknown (missing).
+SMOKED_100 = {"never": 0, "former": 1, "current": 1, "ever": 1, "not current": 1}
+_YES = {"1": 1, "yes": 1, "true": 1, "y": 1, "0": 0, "no": 0, "false": 0, "n": 0, "1.0": 1, "0.0": 0}
+
+
+def _zero_one(value):
+    """A Yes/No answer as 1/0, or NaN when it is blank or unreadable."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return np.nan
+    if isinstance(value, (bool, np.bool_)):
+        return int(value)
+    return _YES.get(str(value).strip().lower(), np.nan)
+
+
+def _number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return np.nan
+    return number if math.isfinite(number) else np.nan
+
+
+def model_inputs(disease, values):
+    """
+    The model's input row from a screening's answers (config.MODEL_INPUTS): smoked_100 from smoking_history, Yes/No
+    answers as 1/0, and a blank as NaN for the pipeline's imputer. Lab values never reach the diabetes or kidney model.
+    A condition without MODEL_INPUTS (heart) gets its answers as they are.
+    """
+    values = values or {}
+    if disease not in MODEL_INPUTS:
+        return dict(values)
+    row = {}
+    for feature in MODEL_INPUTS[disease]:
+        if feature == "smoked_100":
+            row[feature] = SMOKED_100.get(str(values.get("smoking_history") or "").strip().lower(), np.nan)
+        elif feature == "gender":
+            text = str(values.get("gender") or "").strip().lower()
+            row[feature] = {"female": "Female", "male": "Male"}.get(text, np.nan)
+        elif feature in YES_NO_FIELDS:
+            row[feature] = _zero_one(values.get(feature))
+        else:
+            row[feature] = _number(values.get(feature))
+    return row
+
+
+def model_frame(disease, rows, columns):
+    """One model input row per screening's answers, in the pipeline's column order (resources.features)."""
+    return pd.DataFrame([model_inputs(disease, values) for values in rows], columns=columns)
 
 
 def input_bounds(feature, info):
     """Values a model input accepts: the training range widened by a quarter of its span, so realistic values
-    just past the dataset extremes (e.g. an 85-year-old when the data stops at 80) can still be scored."""
+    just past the dataset extremes (e.g. an 85-year-old when the data stops at 80) can still be scored. A form
+    field that is not a training column (config.FORM_FIELD_SPECS) gives its own bounds."""
+    if "bounds" in info:
+        return info["bounds"]
     span = max(info["max"] - info["min"], 1.0)
     floor, cap = PHYSICAL_LIMITS.get(feature.lower(), (-math.inf, math.inf))
     low = info["min"] - 0.25 * span if info["min"] < 0 else max(0.0, info["min"] - 0.25 * span)
@@ -60,7 +115,7 @@ def input_bounds(feature, info):
 def validate_row(values, disease, required, stats, dob=None, reference_date=None):
     """Return normalized model inputs and actionable issues; never silently score an invalid row."""
     clean, issues = {}, []
-    age_key = "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
+    age_key, optional = AGE_FIELD[disease], set(OPTIONAL_INPUTS.get(disease, ()))
     try:
         derived = dob_age(dob, disease, stats, reference_date)
         if derived is not None:
@@ -79,7 +134,8 @@ def validate_row(values, disease, required, stats, dob=None, reference_date=None
     for feature in required:
         value = values.get(feature)
         if value is None or (isinstance(value, str) and not value.strip()) or pd.isna(value):
-            issues.append(f"{feature}: missing; enter a value before scoring.")
+            if feature not in optional:   # an optional value may stay blank
+                issues.append(f"{feature}: missing; enter a value before scoring.")
             clean[feature] = None
             continue
         info, entered, found = stats[feature], value, len(issues)
@@ -105,7 +161,7 @@ def validate_row(values, disease, required, stats, dob=None, reference_date=None
                               f"it accepts {low:g} to {high:g}.")
             clean[feature] = int(number) if info["integer"] and number.is_integer() else number
         else:
-            options = {str(option).strip().lower(): option for option in info["options"]}
+            options = {str(option).strip().lower(): option for option in info.get("accepted", info["options"])}
             clean[feature] = options.get(str(value).strip().lower())
             if clean[feature] is None:
                 issues.append(f"{feature}: choose a category from the training data.")
@@ -130,7 +186,7 @@ def shown_value(feature, value, info, blank="Not provided"):
         return blank
     if info["kind"] == "category":
         text = str(value).strip()
-        known = text.lower() in {str(option).strip().lower() for option in info["options"]}
+        known = text.lower() in {str(option).strip().lower() for option in info.get("accepted", info["options"])}
         return text[:1].upper() + text[1:].lower() if known else str(value)
     try:
         number = float(value)
@@ -138,15 +194,23 @@ def shown_value(feature, value, info, blank="Not provided"):
         return str(value)
     if not math.isfinite(number):
         return str(value)
-    if info.get("binary") and number in (0, 1):
+    if (info.get("binary") or feature in GENDER_CODED_FIELDS | YES_NO_FIELDS) and number in (0, 1):
         return (("Male", "Female") if feature in GENDER_CODED_FIELDS else ("No", "Yes"))[int(number)]
     return f"{round(number, 2) + 0.0:.2f}".rstrip("0").rstrip(".")  # + 0.0 turns -0.0 into 0.0
 
 
+def field_info(stats, feature):
+    """The statistics for a field, or plain ones for a key the current form no longer has (an older saved record's
+    config.LEGACY_FIELDS), so it still displays: words for 0/1 answers, numbers as entered."""
+    return stats.get(feature) or {"kind": "number", "binary": feature in GENDER_CODED_FIELDS | YES_NO_FIELDS,
+                                  "integer": False, "options": []}
+
+
 def prepare_upload(frame, disease, required, stats, id_columns, reference_date=None):
-    """Read rows without requiring age at upload; all other model columns must exist."""
-    age_key = "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
-    absent = [f for f in required if f not in frame.columns and f != age_key]
+    """Read rows without requiring age at upload; every other column the form asks for must exist, except the optional
+    ones (config.OPTIONAL_INPUTS), which read as blank when absent."""
+    age_key, optional = AGE_FIELD[disease], set(OPTIONAL_INPUTS.get(disease, ()))
+    absent = [f for f in required if f not in frame.columns and f != age_key and f not in optional]
     if absent:
         raise ValueError("Missing model columns: " + ", ".join(absent))
     id_column = next((c for c in id_columns if c in frame.columns), None)

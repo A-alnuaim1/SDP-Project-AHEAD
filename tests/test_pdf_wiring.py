@@ -17,7 +17,8 @@ import ahead.screening as screening
 from ahead.clinical_data import prepare_upload
 from ahead.platform_data import init_platform, to_local
 from ahead.reports import patient_report
-from ahead.resources import best_model, feature_summary, features
+from ahead.config import AGE_FIELD, OPTIONAL_INPUTS, form_fields
+from ahead.resources import best_model, feature_summary
 from ahead.storage import authenticate, create_user, init_db, insert_records, list_records, update_record
 from ahead.triage import track_text, triage
 
@@ -27,9 +28,11 @@ LABS = {"HbA1c_level": 6.4, "blood_glucose_level": 140}
 
 
 def typical_row(disease, **changes):
-    stats, age_key = feature_summary(disease), "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
-    row = {f: stats[f]["default"] if stats[f]["kind"] == "category" else stats[f]["mode"] if stats[f]["binary"]
-           else round(stats[f]["median"], 2) for f in features(disease) if f != age_key}
+    """An upload row: every form column at its typical value, the optional labs and readings blank (the model alone
+    sorts it), age from the DOB."""
+    stats, age_key, optional = feature_summary(disease), AGE_FIELD[disease], OPTIONAL_INPUTS.get(disease, [])
+    row = {f: "" if f in optional else stats[f]["default"] if stats[f]["kind"] == "category" else stats[f]["mode"]
+           if stats[f]["binary"] else round(stats[f]["median"], 2) for f in form_fields(disease) if f != age_key}
     return {"PatientID": "DEMO-001", "DOB": "1980-01-01", **row, **changes}
 
 
@@ -138,7 +141,7 @@ class PdfWiringTests(unittest.TestCase):
     def upload(self, rows, source_name, disease="diabetes"):
         frame = pd.DataFrame(rows).astype(str)
         insert_records(self.doctor["id"], "cohort", disease,
-                       prepare_upload(frame, disease, features(disease), feature_summary(disease), ["PatientID"]),
+                       prepare_upload(frame, disease, form_fields(disease), feature_summary(disease), ["PatientID"]),
                        source_name=source_name)
         return sorted(list_records(self.doctor["id"], disease), key=lambda r: r["source_row"])
 
@@ -212,15 +215,17 @@ class PdfWiringTests(unittest.TestCase):
         self.assertNotIn("Pending review", text)
 
     def test_record_pdf_prints_the_track_of_the_record_on_one_page(self):
-        # Every kidney input, reviewed with a note: urine ACR, HbA1c and fasting blood sugar are in a diagnostic
-        # range, so the band is Urgent, as in the queue's Track column, and the copy still fits one page.
-        record = self.upload([typical_row("kidney", PatientID="K-1")], "kidney_cohort.csv", "kidney")[0]
+        # Every kidney input, reviewed with a note: eGFR and urine ACR are in the chronic kidney disease range, so the
+        # band is Urgent, as in the queue's Track column, and the copy still fits one page.
+        record = self.upload([typical_row("kidney", PatientID="K-1", egfr="48", uacr="40", creatinine="1.4",
+                                          systolic_bp="150", diastolic_bp="92", family_kidney="1")],
+                             "kidney_cohort.csv", "kidney")[0]
         self.score(record, 0.8, "Flagged", "kidney")
         update_record(self.doctor["id"], record["id"], status="Reviewed", note="Discussed with the patient.")
         args, text = self.dashboard(disease="kidney")
         track = args["track"]
         self.assertEqual(track, triage("kidney", args["values"], args["score"], args["threshold"]))
-        self.assertEqual([reason["feature"] for reason in track["reasons"]], ["ACR", "HbA1c", "FastingBloodSugar"])
+        self.assertEqual([reason["feature"] for reason in track["reasons"]], ["egfr", "uacr"])
         self.assertEqual(args["audience"], "doctor")
         band = text.split("NEXT STEP Urgent")[1].split("Entered values")[0]
         for reason in track["reasons"]:   # the value with its unit, which only the band prints

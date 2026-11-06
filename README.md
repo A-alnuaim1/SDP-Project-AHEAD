@@ -34,8 +34,8 @@ explanation.
 |---|---|
 | **Sign-in** | Patient or Doctor/Admin demo accounts, public About / Contact / Help pages |
 | **Overview** | Welcome hero with quick-start, KPI cards, session risk distribution, dataset and model-quality charts |
-| **Screenings** | Guided three-section form per condition, six selectable model families (recommended first), gauge, next steps, risk-factor chips, urgent-care notice, AHEAD Insight (Gemini), model interpretation |
-| **Data & Analytics** | Dataset explorer, final test metrics, threshold sweep (heart), algorithm comparison table |
+| **Screenings** | Guided form per condition, six selectable model families (recommended first), gauge, next steps, risk-factor chips, urgent-care notice, AHEAD Insight (Gemini), model interpretation. Diabetes estimates whether HbA1c is likely to be in the prediabetes range or higher; kidney asks short lifestyle and health questions with kidney tests optional; cardiovascular compares answers with survey respondents who reported a heart attack (not a 10-year risk). Every result is sorted into *See a doctor soon*, *At risk* or *Not flagged* (`ahead/triage.py`) |
+| **Data & Analytics** | Dataset explorer, final test metrics, threshold sweep, algorithm comparison table |
 | **Clinical Dashboard** *(doctors)* | Review CSV/XLSX rows for missing/invalid values, derive age from DOB, correct incomplete records, score a cohort, record clinician decisions, and download CSV/PDF summaries |
 | **AI Assistant** | "Ask AHEAD" chat with suggested prompts; answers via Gemini (offline answers for the suggestions) |
 | **Settings** | Persistent profile/password, Light/Dark appearance, session history controls and account actions |
@@ -102,11 +102,12 @@ SDP-Project-AHEAD/
 │       ├── assistant.py    ← Ask AHEAD chat
 │       └── settings.py     ← settings tabs
 ├── train_model.py          ← benchmarks six model families per disease, saves models + metadata
-├── scripts/missing_inputs.py ← measures every model with optional inputs left blank
+├── scripts/build_nhanes_training.py ← builds the NHANES diabetes and kidney training files
+├── scripts/missing_inputs.py ← measures every model with optional model inputs left blank
 ├── login.css               ← styles for the public (pre-login) pages
 ├── assets/                 ← favicon and SVG icons (inlined as data URIs)
 ├── static/                 ← large background images, served by Streamlit at app/static/…
-├── data/                   ← diabetes.csv · heart.csv · kidney_disease.csv
+├── data/                   ← nhanes_diabetes.csv · nhanes_kidney.csv · heart.csv · nhanes/ (source extract)
 ├── models/
 │   ├── <disease>_model.pkl ← recommended pipeline per disease
 │   ├── all_models/         ← every benchmarked pipeline (<disease>_<model>.pkl)
@@ -151,7 +152,7 @@ Open the printed URL (usually `http://localhost:8501`). Create a patient account
 
 Demo accounts are disabled by default. Set `AHEAD_ENABLE_DEMO_ACCOUNTS=1` **only** for a classroom demo; never upload identifiable patient records when demo credentials are enabled. Accounts use salted password hashes and are stored in the local SQLite database. Doctor accounts see the Clinical Dashboard and records are scoped to their own account. This is a research prototype, not a production authentication or health-record system.
 
-Clinical uploads require model feature columns except age. An optional `DOB`, `DateOfBirth`, `date_of_birth`, or `Date of Birth` column (YYYY-MM-DD) fills age or the heart model's age category. Missing and invalid values appear per row and are not scored until corrected. Correct a row and save it in the review queue, then score eligible records. Clinicians can mark a record reviewed or excluded and add a note. The file is limited to 5,000 rows and 15 MB. The PDF and CSV contain entered data; handle downloads appropriately.
+Clinical uploads use the form's columns. Age and the optional columns (lab values, readings and the heart history questions) may be left out. An optional `DOB`, `DateOfBirth`, `date_of_birth`, or `Date of Birth` column (YYYY-MM-DD) fills age or the heart model's age category. Missing and invalid values appear per row and are not scored until corrected. Correct a row and save it in the review queue, then score eligible records. Clinicians can mark a record reviewed or excluded and add a note. The file is limited to 5,000 rows and 15 MB. The PDF and CSV contain entered data; handle downloads appropriately.
 
 The app is English only. No email, text or push notifications are sent. The map-search link does not show live appointment availability.
 
@@ -180,15 +181,33 @@ suggested questions from built-in text. The model name lives in `ahead/config.py
 
 ## Datasets
 
-| Condition | File | Records | Target |
-|---|---|---|---|
-| Diabetes | `data/diabetes.csv` | 100,000 | `diabetes` |
-| Cardiovascular | `data/heart.csv` | 246,022 | `HadHeartAttack` |
-| Chronic kidney disease | `data/kidney_disease.csv` | 1,659 | `Diagnosis` |
+All three models are trained on real CDC survey data; nothing is generated or synthetic. Sources,
+licences, label definitions, held-out results and limitations are in
+[`docs/data_sources.md`](docs/data_sources.md).
 
-Two of the datasets are strongly imbalanced (8.5 % positive for diabetes, 5.5 % for heart,
-92 % positive for kidney), which is why the app reports disease recall, F1/F2 and ROC-AUC
-alongside accuracy.
+| Condition | File | Source | Records | Target (1 means) | Test set |
+|---|---|---|---|---|---|
+| Diabetes | `data/nhanes_diabetes.csv` | CDC NHANES 1999-2023 (public domain) | 53,903 | `hba1c_57_or_higher`: HbA1c ≥ 5.7 % at the exam, in adults never told they have diabetes | 2021-2023 cycle (4,966) |
+| Cardiovascular | `data/heart.csv` | CDC BRFSS 2022 via Kaggle, Kamil Pytlak (CC0) | 246,022 | `HadHeartAttack`: ever told they had a heart attack (a past event) | random 20 % (49,205) |
+| Kidney health | `data/nhanes_kidney.csv` | CDC NHANES 1999-2023 (public domain) | 60,396 | `kidney_marker`: eGFR < 60 or urine ACR ≥ 30 mg/g at one visit | 2021-2023 cycle (5,551) |
+
+25.8 % of diabetes rows, 16.8 % of kidney rows and 5.5 % of heart rows are positive, which is why the app
+reports sensitivity, specificity, precision and ROC-AUC alongside accuracy. Lab values are never inputs to
+the diabetes or kidney models (they define the labels); the app checks them with rules instead.
+
+The two NHANES files are built from CDC's raw public-use files: `scripts/fetch_nhanes.py` downloads them,
+`scripts/rebuild_nhanes.py` merges and cleans them into `data/nhanes/nhanes_1999_2023_research.csv.gz` (with
+CDC's recommended creatinine corrections) and `scripts/build_nhanes_training.py` writes the training files. The earlier `diabetes.csv` and
+`kidney_disease.csv` were removed: the kidney file was synthetic and the diabetes file's origin and licence
+were unknown.
+
+| Condition | Recommended model | Threshold | Test AUC | Sensitivity | Specificity | Precision |
+|---|---|---|---|---|---|---|
+| Diabetes | Logistic regression | 0.21 | 0.735 | 86.0 % | 48.3 % | 39.6 % |
+| Cardiovascular | Logistic regression | 0.05 | 0.828 | 79.8 % | 71.0 % | 13.7 % |
+| Kidney health | Logistic regression | 0.22 | 0.776 | 66.2 % | 77.5 % | 37.7 % |
+
+For comparison, a partial ADA diabetes risk score reaches a test AUC of 0.722 on the same diabetes test rows.
 
 ---
 
@@ -197,22 +216,32 @@ alongside accuracy.
 The trained pipelines are included. To rebuild everything:
 
 ```bash
+python scripts/fetch_nhanes.py            # CDC NHANES files into data/nhanes/raw/ (~283 MB, not committed)
+python scripts/rebuild_nhanes.py          # data/nhanes/nhanes_1999_2023_research.csv.gz
+python scripts/build_nhanes_training.py   # data/nhanes_diabetes.csv, data/nhanes_kidney.csv
 python train_model.py
+python scripts/missing_inputs.py
 ```
 
-For each disease the script:
+For each disease `train_model.py`:
 
-1. splits the data 64 % train / 16 % validation / 20 % test (stratified),
+1. splits the data: for diabetes and kidney the 2021-2023 NHANES cycle is the test set and the earlier
+   cycles are split 80 % train / 20 % validation (stratified); for heart it is a stratified
+   64 % train / 16 % validation / 20 % test,
 2. trains Random Forest, Logistic Regression, Gradient Boosting, SVM, Decision Tree and XGBoost
-   inside a `Pipeline(preprocessor → classifier)`,
+   inside a `Pipeline(preprocessor → classifier)`, without class re-weighting so scores stay close to
+   observed rates,
 3. saves every pipeline to `models/all_models/` so the app can compare them,
-4. picks the winner on the validation set (macro-F1 for diabetes/kidney, F2 for heart),
-5. tunes the heart model's probability threshold on the validation set,
-6. reports final metrics once on the untouched test set and writes `models/model_meta.json`.
+4. recommends Logistic Regression for every condition (its score moves one way per answer and can be
+   explained; the gap to the best family's validation ROC-AUC is recorded),
+5. tunes each model's probability threshold on the validation set to maximise Youden's J
+   (sensitivity + specificity − 1),
+6. reports final metrics and a calibration check once on the untouched test set and writes
+   `models/model_meta.json` (including the data source, label definition, population and split).
 
-Then run `python scripts/missing_inputs.py`. It measures every saved diabetes and kidney model on the
-same test split with each allowed pattern of optional inputs left blank, and writes
-`models/missing_inputs.json`, which the result page uses for its figures and thresholds.
+`scripts/missing_inputs.py` measures every saved model with each allowed pattern of optional model inputs
+left blank and writes `models/missing_inputs.json`. No current model has optional model inputs, so the file
+lists none.
 
 ---
 
@@ -220,13 +249,24 @@ same test split with each allowed pattern of optional inputs left blank, and wri
 
 * **Preprocessing** — numeric columns are median-imputed and standardised; categorical columns
   are most-frequent-imputed and one-hot encoded (`ColumnTransformer`).
-* **Prediction** — `predict_proba()` gives the probability of the disease class; the result is
-  "elevated" when it reaches the model's decision threshold (0.5, or the tuned value for the
-  recommended heart model).
-* **Optional inputs** — diabetes lab values and most kidney measurements can be left blank; the
-  pipeline's imputer fills them. Diabetes then uses a lower threshold chosen on the validation set
-  (never above the usual one), and the result page shows the model's measured test performance with
-  the same inputs blank. Kidney needs serum creatinine, eGFR and urine ACR before it gives a score.
+* **Prediction** — `predict_proba()` gives the model's score for the condition; the result is
+  flagged when it reaches the chosen model's own threshold, tuned on the validation set for every benchmark model.
+  The heart label is a past heart attack, so the heart score is close to the share of BRFSS respondents
+  with similar answers who reported one; it is not a 10-year or future risk.
+* **Heart history** — the heart form also asks about a past heart attack and angina (`HadHeartAttack`,
+  `HadAngina`; never model inputs). A Yes to either, or to a past stroke (`HadStroke`, also a model input),
+  puts the result on *See a doctor soon* whatever the score, and no prevention plan is offered for it.
+  Heart screenings and uploads without these answers still score; a blank answer is not checked.
+* **Lab values** — HbA1c, glucose, creatinine, eGFR and urine ACR are not model inputs; entered values
+  are checked by the rules in `ahead/triage.py`, and a measured value counts for more than the model's
+  estimate: diabetes HbA1c ≥ 6.5 % or glucose ≥ 200 mg/dL → *See a doctor soon*, HbA1c 5.7–6.4 % → *At risk*,
+  HbA1c < 5.7 % → *Not flagged*; kidney eGFR < 60 or ACR ≥ 30 mg/g → *See a doctor soon* (repeat the test soon
+  to rule out a short-term change, and at about 3 months to confirm it), eGFR ≥ 60 with ACR < 30 mg/g → *Not
+  flagged*. Without these labs the model decides. eGFR is
+  worked out from serum creatinine with the 2021 race-free CKD-EPI equation when only creatinine is entered.
+* **Older saved records** — kidney screenings and uploads saved with the retired kidney form keep their keys
+  (`config.LEGACY_FIELDS`); they still display, sort into a track and print, but are never re-scored. Their HbA1c
+  (≥ 6.5 %) and fasting blood sugar (≥ 126 mg/dL) still make them *See a doctor soon* (`triage.LEGACY_RULES`).
 * **Interpretation** — tree models expose `feature_importances_`, Logistic Regression uses
   absolute coefficient magnitude; RBF-SVM has no per-feature importance.
 * **Rule-based factors** — independent of the model, the app highlights entered values that are

@@ -1,3 +1,15 @@
+> **Note (November 2026): this study ran on retired data.** Its diabetes and kidney figures come from the Kaggle
+> `diabetes.csv` (origin and licence unknown) and the synthetic Kaggle `kidney_disease.csv`, which AHEAD no longer
+> uses, and its cardiovascular figures from the earlier class-weighted heart model (see `docs/data_sources.md`).
+> The engine and its script (`ahead/risk_plan.py`, `scripts/evaluate_risk_plans.py`) were removed, so the numbers
+> below cannot be re-run. The conclusion still stands, and for reasons that do not depend on those files: a model
+> score describes who in the data had an outcome, not what a change would do for one person, so a plan chosen to
+> lower it is not evidence that it lowers anyone's risk. The current models make this plainer still. The diabetes
+> and kidney models take no lab values, so a doctor's lab target cannot even be expressed as a model change; in the
+> diabetes model, smoking barely moves the score; in the kidney model (gradient boosting), adding 5 to BMI lowers
+> the score for 21% of test rows; and the heart model's label is a past heart attack. So AHEAD still sorts each
+> result into a track and lets a doctor approve standard prevention advice instead of letting the model choose a plan.
+
 > **Why AHEAD sorts results into tracks.** This study is why every screening result now goes on one track ("See a doctor soon", "At risk" or "Not flagged") instead of getting a plan the model chose to lower its score.
 > It found that 98% of flagged diabetes and 95% of flagged kidney test rows already have the condition, most with labs already in diagnostic ranges, and that realistic changes rarely take a flagged score below the threshold.
 > Its gates became the urgent rules in `ahead/triage.py`; the report below is unchanged output of `python scripts/evaluate_risk_plans.py --out <dir> --demo-db <copy of a demo database>`.

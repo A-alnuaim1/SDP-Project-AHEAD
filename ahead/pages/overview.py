@@ -73,8 +73,9 @@ def _plural(count: int, word: str) -> str:
 def _care_snapshot(doctor_id: int) -> dict:
     """
     Linked patients, recent assessment counts and the patients needing a look: urgent first, then newest. A patient
-    needs a look for a flagged or urgent result in the last 30 days (sorted from the saved values, score and
-    threshold, so an urgent value counts even when the model did not flag it) or a missed dose today. Each item's
+    needs a look for an urgent or at-risk result in the last 30 days (sorted from the saved values, score and
+    threshold, so an urgent value counts even when the model did not flag it, and a measured lab value in the usual
+    range clears a model flag) or a missed dose today. Each item's
     "later" holds, per flagged assessment, the values a newer screening of the same condition entered, so a test the
     row would ask for is dropped once the patient has had it (triage.missing_tests).
     """
@@ -87,9 +88,10 @@ def _care_snapshot(doctor_id: int) -> dict:
         week += moment.date() > today - timedelta(days=7)
         if moment.date() <= today - timedelta(days=30):
             continue
-        flagged += bool(a["prediction"])
         track = triage_saved(a["disease"], a["values_json"], a["score"], a["threshold"])
-        if a["prediction"] or track["urgent"]:
+        # Counted by track, as the rows are: a measured lab value can set or clear the model's flag.
+        flagged += track["track"] in ("urgent", "at_risk")
+        if track["track"] in ("urgent", "at_risk"):
             rows.setdefault(a["owner_id"], {"flags": [], "doses": []})["flags"].append((moment, a, track))
     missed = 0
     for p in people:
@@ -109,7 +111,7 @@ def _care_snapshot(doctor_id: int) -> dict:
              for pid, row in rows.items() if pid in names]
     items.sort(key=lambda item: (item["urgent"], item["latest"]), reverse=True)
     return {"people": people, "items": items, "week": week, "flagged": flagged, "missed": missed,
-            "flagged_ids": [i["id"] for i in items if any(a["prediction"] for _, a, _ in i["flags"])],
+            "flagged_ids": [i["id"] for i in items if i["flags"]],
             "review_ids": [i["id"] for i in items if i["flags"]], "urgent_ids": [i["id"] for i in items if i["urgent"]],
             "missed_ids": [i["id"] for i in items if i["doses"]]}
 

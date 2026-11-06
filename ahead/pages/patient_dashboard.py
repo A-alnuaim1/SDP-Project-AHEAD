@@ -8,7 +8,7 @@ from ahead.config import DISEASES
 from ahead.platform_data import lifestyle_history,get_goals,challenge_days,open_doses,local_today,to_local
 from ahead.screening import share_with_doctor
 from ahead.storage import load_screenings
-from ahead.triage import open_urgent, track_text
+from ahead.triage import open_urgent, track_text, triage_saved
 from ahead.wellness import challenge_summary
 from ahead.visuals import summary_card,week_strip,score_ring,progress_card,category_chart,trend,COLORS
 
@@ -95,5 +95,5 @@ def render_patient_dashboard():
     condition_cards('patient_dashboard')
     if assessments:
         section_heading('Recent saved assessments','Model scores are educational outputs, not diagnoses.')
-        st.dataframe(pd.DataFrame([{'Date':r['created_at'][:16],'Condition':r['disease'].title(),'Model':r['model'],'Score (%)':round(r['score']*100,1),'Threshold (%)':round(r['threshold']*100,1),'Result':'Flagged' if r['prediction'] else 'Not flagged'} for r in assessments[:8]]),hide_index=True,width='stretch')
+        st.dataframe(pd.DataFrame([{'Date':r['created_at'][:16],'Condition':r['disease'].title(),'Model':r['model'],'Score (%)':round(r['score']*100,1),'Threshold (%)':round(r['threshold']*100,1),'Result':track_text(triage_saved(r['disease'],r['values_json'],r['score'],r['threshold']),'patient')['short']} for r in assessments[:8]]),hide_index=True,width='stretch')
     disclaimer()

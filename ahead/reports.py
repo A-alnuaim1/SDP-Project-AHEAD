@@ -18,9 +18,11 @@ from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, KeepTogether, LayoutError, PageBreak, PageTemplate,
                                 Paragraph, Spacer, Table, TableStyle)
 
-from ahead.config import DISEASES, GENDER_CODED_FIELDS, MODEL_NAMES, pretty_label
+from ahead.config import (DISEASES, GATE_ONLY_FIELDS, GENDER_CODED_FIELDS, LEGACY_FIELDS, MODEL_INPUTS, MODEL_NAMES,
+                          YES_NO_FIELDS, pretty_label)
 from ahead.resources import feature_summary
-from ahead.triage import ADULTS_ONLY, RULES, TRACKS, number_text, track_text
+from ahead.triage import (ADULTS_ONLY, HISTORY, LEGACY_RULES, RULES, TRACKS, entered, number_text, prepared_values,
+                          track_text)
 
 PAGE_W, PAGE_H = A4
 MARGIN, BAND_H, SLIM_H, FOOTER_Y, BOTTOM = 40, 62, 30, 28, 56
@@ -80,19 +82,30 @@ def patient_report(disease, patient_id, values, score, threshold, model, metrics
     if audience not in ("doctor", "patient"):   # a guess could hand the doctor's copy, note included, to a patient
         raise ValueError(f"audience must be 'doctor' or 'patient', not {audience!r}")
     patient, stats, metrics = audience == "patient", _stats(disease), metrics or {}
-    rules = {rule.feature: rule for rule in RULES.get(disease, ())}
+    rules = {rule.feature: rule for rule in RULES.get(disease, ()) + LEGACY_RULES.get(disease, ())}
+    # An older saved screening's key reads its value under the rule for the current name (GFR -> egfr).
+    rules |= {old: rules[new] for old, new in LEGACY_FIELDS.get(disease, {}).items() if new in rules}
+    # A blank eGFR that the band works out from creatinine prints as that estimate, not as "Not provided".
+    derived = entered(prepared_values(disease, values or {}).get("egfr")) if disease == "kidney" else None
+
+    def shown(key, value):
+        rule = rules.get(key)
+        text = _shown(key, value, stats.get(key, {}), rule)
+        if text is None and derived is not None and rule is not None and rule.feature == "egfr":
+            return f"{number_text(derived)} (from creatinine)"
+        return text
+
     usual = None if _blank(usual_threshold) else _clamp(usual_threshold)
     threshold = _clamp(threshold) if not _blank(threshold) else usual if usual is not None else 0.5
     name = _short(name)
     factors = [factors] if isinstance(factors, str) else factors or ()
     r = SimpleNamespace(
-        patient=patient, condition=DISEASES[disease]["label"], patient_id=_short(patient_id),
+        patient=patient, disease=disease, condition=DISEASES[disease]["label"], patient_id=_short(patient_id),
         name="" if OTHER_SCRIPT in name else name,   # a name is dropped rather than printed half-marked
         status=_text(status).lower(), review=status is not None and not patient, reviewer=_short(reviewer),
         source=_short(source), reviewed_at=_when(reviewed_at), generated=_when(generated_at) or _when(datetime.now(DUBAI)),
         score=_clamp(score), threshold=threshold, usual=usual, model=_model_name(model),
-        values=[(_short(_sentence(pretty_label(k)), 80), _shown(k, v, stats.get(k, {}), rules.get(k)))
-                for k, v in (values or {}).items()],
+        values=[(_short(_sentence(pretty_label(k)), 80), shown(k, v)) for k, v in (values or {}).items()],
         factors=[_short(f) for f in factors if not _blank(f)], note="" if patient else _text(note),
         recall=_metric(metrics, "recall_disease"), precision=_metric(metrics, "precision_disease"),
         source_set=_text(metric_source) or "test", scope=_text(metric_scope).lstrip(", "), caveat=_text(metric_caveat),
@@ -105,6 +118,11 @@ def patient_report(disease, patient_id, values, score, threshold, model, metrics
         below = min(math.floor(r.score * 10_000) / 100, float(r.shown_threshold[:-1]) - 0.01)
         r.shown_score = f"{max(0.0, below):.2f}%"
     r.blanks = any(v is None for _, v in r.values)
+    r.labs_only = disease in MODEL_INPUTS   # a blank is then a lab or reading the model never reads
+    # Heart's gate questions left blank (an upload without them) are history questions the model never reads either.
+    r.gates_only = r.blanks and not r.labs_only and all(
+        k in GATE_ONLY_FIELDS.get(disease, ()) for k, v in (values or {}).items()
+        if shown(k, v) is None)
     r.performance = r.recall is not None or r.precision is not None or bool(r.caveat)
     return _render(r)
 
@@ -221,7 +239,7 @@ def _shown(feature, value, info, rule=None):
             return NOT_RECORDED
         known = text.lower() in {str(option).lower() for option in info.get("options", ())}
         return text[:1].upper() + text[1:].lower() if known else text
-    if info.get("binary") and number in (0, 1):
+    if (info.get("binary") or feature in GENDER_CODED_FIELDS | YES_NO_FIELDS) and number in (0, 1):
         return (("Male", "Female") if feature in GENDER_CODED_FIELDS else ("No", "Yes"))[int(number)]
     if number.is_integer():
         return str(int(number))
@@ -247,13 +265,15 @@ def _track(track, disease, flagged, audience):
     return SimpleNamespace(name=track["track"], label=_text(text["label"]), summary=_text(text["summary"]),
                            reasons=[SimpleNamespace(words=_text(reason[audience]), line=_reason_line(reason))
                                     for reason in reasons],
-                           values=sum(reason.get("kind") != ADULTS_ONLY for reason in reasons))
+                           values=sum(reason.get("kind") not in (ADULTS_ONLY, HISTORY) for reason in reasons),
+                           history=any(reason.get("kind") == HISTORY for reason in reasons))
 
 
 def _reason_line(reason):
     """(label, value, cut-off) for the band's short forms, or None for a reason that keeps its words there: blood
-    pressure (the patient's emergency-care line) and age (why a flagged child needs a doctor)."""
-    if reason.get("kind") in ("blood_pressure", ADULTS_ONLY):
+    pressure (the patient's emergency-care line), age (why a flagged child needs a doctor) and a reported past heart
+    attack, angina or stroke (why the score does not apply)."""
+    if reason.get("kind") in ("blood_pressure", ADULTS_ONLY, HISTORY):
         return None
     parts = tuple(_text(reason.get(key)) for key in ("label", "value_text", "cut_off_text"))
     return parts if all(parts) else None
@@ -528,7 +548,8 @@ class ResultPanel(Flowable):
 
     def draw(self):
         c, r, w = self.canv, self.r, self.width
-        fill, ink, tint, outline = FLAGGED if r.flagged else CLEAR
+        model_tone = FLAGGED if r.flagged else CLEAR   # the track's tone when there is one, so it matches its headline
+        fill, ink, tint, outline = TRACK_TONES.get(r.track.name, model_tone) if r.track else model_tone
         c.setFillColor(tint)
         c.setStrokeColor(outline)
         c.setLineWidth(0.8)
@@ -539,11 +560,15 @@ class ResultPanel(Flowable):
         _tracked(c, x0, top - 5, eyebrow, 6.8, 1.0, ink)
         c.setFillColor(ink)
         c.setFont("Helvetica-Bold", 22)
-        c.drawString(x0 - 0.8, top - 27, "Flagged" if r.flagged else "Not flagged")
+        # The track is the result (a measured lab value or a past heart event can override the model's flag); the line
+        # under it keeps the model's own flag.
+        headline = r.track.label if r.track else "Flagged" if r.flagged else "Not flagged"
+        c.drawString(x0 - 0.8, top - 27, _fit(headline, "Helvetica-Bold", 22, self.inner * 0.6))
         c.setFillColor(TEXT)
         c.setFont("Helvetica", 8.6)
-        c.drawString(x0, top - 41, f"{'Your' if r.patient else 'The model'} score is "
-                                   f"{'at or above' if r.flagged else 'below'} the classification threshold.")
+        whose = "The model's" if r.track or not r.patient else "Your"
+        c.drawString(x0, top - 41, f"{whose} score is {'at or above' if r.flagged else 'below'} the classification "
+                                   "threshold.")
         _tracked(c, x1, top - 5, "MODEL SCORE", 6.8, 1.0, MUTED, "right")
         c.setFillColor(TITLE)
         c.setFont("Helvetica-Bold", 24)
@@ -779,7 +804,13 @@ def _values_table(rows, width, pad=None):
 
 def _entered(r, width, pad=None):
     out = [_heading("Entered values"), Spacer(1, HEAD_GAP), _values_table(r.values, width, pad)]
-    if r.blanks:
+    if r.blanks and r.labs_only:
+        out += [Spacer(1, 6), Paragraph("<i>Not provided</i>: left blank. These are tests and readings the model does "
+                                        "not use, so AHEAD could not check them against its ranges.", ST["caveat"])]
+    elif r.blanks and r.gates_only:
+        out += [Spacer(1, 6), Paragraph("<i>Not provided</i>: left blank. These history questions are not model "
+                                        "inputs, so AHEAD could not check them.", ST["caveat"])]
+    elif r.blanks:
         out += [Spacer(1, 6), Paragraph("<i>Not provided</i>: left blank. The model filled these inputs with typical "
                                         "values from its training data, so this estimate is less reliable.", ST["caveat"])]
     return out
@@ -817,9 +848,19 @@ def _reading(r):
     if r.patient:
         # Under a "See a doctor soon" band, regular check-ups would read as leave to wait for a routine visit.
         check_ups = "" if _urgent(r) else " Keep up your regular check-ups."
+        if r.disease == "heart":   # the label is a past heart attack, so the score is not a future risk either
+            return [("Not a 10-year risk.", "Your score compares your answers with people in a CDC survey who had had "
+                                            "a heart attack. It is not your chance of having one."),
+                    ("Not a diagnosis.", "A flag is not a diagnosis. Only a doctor can diagnose a condition."),
+                    ("Not an all-clear.", "A lower score does not rule the condition out." + check_ups)]
         return [("Not a probability.", "Your score is a model output. It is not the chance that you have the condition."),
                 ("Not a diagnosis.", "A flag is not a diagnosis. Only a doctor can diagnose a condition."),
                 ("Not an all-clear.", "A lower score does not rule the condition out." + check_ups)]
+    if r.disease == "heart":
+        return [("Not a 10-year risk.", "The score reflects BRFSS 2022 respondents who reported a past myocardial "
+                                        "infarction; it is not a prospective risk."),
+                ("Not a diagnosis.", "A flag is not a diagnosis; findings need clinical confirmation."),
+                ("Not a rule-out.", "A lower score does not rule disease out.")]
     return [("Not a probability.", "The score is a model output, not the patient's probability of disease."),
             ("Not a diagnosis.", "A flag is not a diagnosis; findings need clinical confirmation."),
             ("Not a rule-out.", "A lower score does not rule disease out.")]
@@ -921,12 +962,15 @@ def _next_steps(r):
         change = "Is there anything I could change day to day to lower my risk?"
         if _urgent(r):   # questions for a visit soon about the band's reasons, not for the next routine check-up
             values = r.track.values
-            first = ("AHEAD's screening rules are written for adults. Which tests would confirm this result for me?"
+            first = ("I have had a heart attack, angina or a stroke. Which heart check-ups and care do I need?"
+                     if r.track.history else
+                     "AHEAD's screening rules are written for adults. Which tests would confirm this result for me?"
                      if not values else f"{'One of my values is' if values == 1 else 'Some of my values are'} in a "
                      "range doctors use when diagnosing a condition. Which tests will confirm it?")
             items, visit = [first] + ([noted] if noted else []) + [change], "Please bring it to a doctor soon"
         else:
-            items = (["My result was flagged. What should we look at first?"] if r.flagged else []) + [
+            flagged = r.track.name in ("urgent", "at_risk") if r.track else r.flagged
+            items = (["My result was flagged. What should we look at first?"] if flagged else []) + [
                 "Given my health and family history, which checks or tests make sense for me?"] + (
                 [noted] if noted else []) + [change, "How often should I be checked for this?"]
             visit = "You could bring it to your next appointment"

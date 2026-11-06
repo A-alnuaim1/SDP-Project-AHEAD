@@ -21,14 +21,18 @@ import ahead.pages.overview as overview
 from ahead.clinical_data import prepare_upload
 from ahead.components import track_pill_html
 from ahead.platform_data import grant_doctor, init_platform
-from ahead.resources import best_model, feature_summary, features
+from ahead.config import AGE_FIELD, OPTIONAL_INPUTS, form_fields
+from ahead.resources import best_model, feature_summary
 from ahead.storage import (authenticate, connection, create_user, init_db, insert_records, list_records, save_screening,
                            update_record)
 from ahead.triage import LABELS, TRACKS, track_text, triage
 
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
 DOCTOR_LABELS = [LABELS[track]["doctor"][0] for track in TRACKS]   # Urgent, At risk, Not flagged, No score
-CLEAR = {"age": 40, "HbA1c_level": 5.5, "blood_glucose_level": 140}   # below every diabetes cut-off
+# Below every diabetes cut-off, and no HbA1c saved, so the model alone sorts it (an HbA1c under 5.7% would clear a
+# model flag, and a blank one would add a test to ask for).
+CLEAR = {"age": 40, "blood_glucose_level": 140}
+KIDNEY_CONFIRM = "a doctor needs to confirm it with tests: repeat promptly to exclude AKI; chronicity is confirmed at 3 months."
 NOT_FLAGGED_BUT = "The model did not flag this result, but the patient's "
 
 
@@ -38,9 +42,11 @@ def reason(disease, values, score, threshold=0.5):
 
 
 def typical_row(disease, **changes):
-    stats, age_key = feature_summary(disease), "AgeCategory" if disease == "heart" else "Age" if disease == "kidney" else "age"
-    row = {f: stats[f]["default"] if stats[f]["kind"] == "category" else stats[f]["mode"] if stats[f]["binary"]
-           else round(stats[f]["median"], 2) for f in features(disease) if f != age_key}
+    """An upload row: every form column at its typical value, the optional labs and readings blank (the model alone
+    sorts it), age from the DOB."""
+    stats, age_key, optional = feature_summary(disease), AGE_FIELD[disease], OPTIONAL_INPUTS.get(disease, [])
+    row = {f: "" if f in optional else stats[f]["default"] if stats[f]["kind"] == "category" else stats[f]["mode"]
+           if stats[f]["binary"] else round(stats[f]["median"], 2) for f in form_fields(disease) if f != age_key}
     return {"PatientID": "DEMO-001", "DOB": "1980-01-01", **row, **changes}
 
 
@@ -139,18 +145,20 @@ class DoctorHomeTriageTests(Fixture):
         self.assertRegex(amy_lines[0], r"^Diabetes · 80% · today \d\d:\d\d$")
         self.assertEqual(len(amy_lines), 1)
         self.assertNotRegex(page, r"\b[Yy]our (HbA1c|blood)")
-        # The Flagged card counts flagged results (Amy 1, Ben 2) and adds the urgent patients (Ben, Cara).
+        # The Flagged card counts results by track, as the rows are (Amy 1, Ben 2, Cara's rule-only urgent 1), and
+        # adds the urgent patients (Ben, Cara).
         card = re.search(r'summary-label">Flagged · 30 days</span><strong class="summary-value">(\d+)</strong>\s*'
                          r'<p class="summary-note">([^<]+)</p>', page)
-        self.assertEqual(card.groups(), ("3", "Across 2 patients · 2 urgent"))
+        self.assertEqual(card.groups(), ("4", "Across 3 patients · 2 urgent"))
         self.assertIn("Urgent and flagged results from the last 30 days, urgent first", page)
 
     def test_a_single_rule_only_urgent_patient_fills_the_card_note_and_its_click(self):
         cara = self.patient("c@test.com", "Cara Diaz")
         self.screening(cara, 0.2, {"age": 60, "blood_glucose_level": 250})
         page = self.html(self.page("overview"))
-        self.assertRegex(page, r'summary-label">Flagged · 30 days</span><strong class="summary-value">0</strong>\s*'
-                               r'<p class="summary-note">No flagged results · 1 urgent</p>')
+        # Counted by track: the rule-only urgent result counts on the Flagged card too.
+        self.assertRegex(page, r'summary-label">Flagged · 30 days</span><strong class="summary-value">1</strong>\s*'
+                               r'<p class="summary-note">Across 1 patient · 1 urgent</p>')
         self.assertEqual(page.count('class="track-pill urgent"'), 1)
         self.assertNotIn("Nothing needs your attention", page)
         # The card opens that one patient's records, like a single flagged patient.
@@ -172,12 +180,13 @@ class DoctorHomeTriageTests(Fixture):
         self.assertIn('track-pill at-risk" title="At risk">At risk', page)
 
     def test_reason_line_helper(self):
-        flagged = triage("kidney", {"GFR": 45}, 0.8, 0.5)
-        below = triage("kidney", {"GFR": 45}, 0.2, 0.5)
-        self.assertEqual(overview._reason(flagged), flagged["reasons"][0]["doctor"])
-        self.assertEqual(overview._reason(below), "The model did not flag this result, but the patient's eGFR of 45 is "
-                                                  "below 60, a level used when diagnosing chronic kidney disease; a doctor "
-                                                  "needs to confirm it with tests.")
+        for key in ("egfr", "GFR"):   # the current key, and an older saved kidney screening's
+            flagged = triage("kidney", {key: 45}, 0.8, 0.5)
+            below = triage("kidney", {key: 45}, 0.2, 0.5)
+            self.assertEqual(overview._reason(flagged), flagged["reasons"][0]["doctor"])
+            self.assertEqual(overview._reason(below), "The model did not flag this result, but the patient's eGFR of 45 "
+                                                      "is below 60, a level used when diagnosing chronic kidney disease; "
+                                                      + KIDNEY_CONFIRM)
 
 
 # =============================================================================
@@ -187,7 +196,8 @@ class DoctorHomeTriageTests(Fixture):
 class IntelligenceTriageTests(Fixture):
     def test_track_column_caption_and_the_urgent_now_count(self):
         p, q = self.patient("p@test.com", "Alice Mansour"), self.patient("q@test.com", "Quinn Ross")
-        kidney = self.screening(p, 0.3, {"Age": 50, "GFR": 45, "ACR": 10}, "kidney", days_ago=2)   # urgent, model below
+        # urgent, model below; saved by the retired kidney form, so under its older keys
+        kidney = self.screening(p, 0.3, {"Age": 50, "GFR": 45, "ACR": 10}, "kidney", days_ago=2)
         flagged = self.screening(p, 0.8, {"age": 50, "HbA1c_level": 7.2}, days_ago=1)                # urgent and flagged
         self.screening(p, 0.2, CLEAR)            # newest diabetes: not flagged, but kidney is still urgent
         self.screening(q, 0.8, {"age": 50, "blood_glucose_level": 230}, days_ago=1)
@@ -211,8 +221,7 @@ class IntelligenceTriageTests(Fixture):
         self.assertTrue(any(c.endswith("· Not flagged · Track: Not flagged.") for c in captions()))
         self.widget(at.selectbox, "Open historical assessment").set_value(kidney)
         self.ok(at.run())
-        expected = (NOT_FLAGGED_BUT + "eGFR of 45 is below 60, a level used when diagnosing chronic kidney disease; a doctor "
-                    "needs to confirm it with tests.")
+        expected = NOT_FLAGGED_BUT + "eGFR of 45 is below 60, a level used when diagnosing chronic kidney disease; " + KIDNEY_CONFIRM
         self.assertIn(f"score 30.0% against a 50.0% threshold · Not flagged · Track: Urgent. {expected}", "\n".join(captions()))
         self.widget(at.selectbox, "Open historical assessment").set_value(flagged)
         self.ok(at.run())
@@ -244,7 +253,7 @@ class ClinicalTriageTests(Fixture):
     def setUp(self):
         super().setUp()
         frame = pd.DataFrame([typical_row("diabetes", PatientID=pid, **changes) for pid, changes, _ in self.ROWS]).astype(str)
-        insert_records(self.d["id"], "cohort", "diabetes", prepare_upload(frame, "diabetes", features("diabetes"),
+        insert_records(self.d["id"], "cohort", "diabetes", prepare_upload(frame, "diabetes", form_fields("diabetes"),
                        feature_summary("diabetes"), ["PatientID"]), source_name="clinic.csv")
         self.records = {r["patient_id"]: r for r in list_records(self.d["id"], "diabetes")}
         for pid, _, score in self.ROWS:
@@ -350,21 +359,20 @@ class ClinicalTriageTests(Fixture):
     def test_values_past_the_input_range_stay_urgent(self):
         """A value too far outside the training range for the model fails validation, yet the urgent rules still sort
         it, and the panel note asks for a check against the source; a blank or a non-number never trips a rule."""
-        clear = {"kidney": {"HbA1c": "5.4", "GFR": "80", "ACR": "10", "FastingBloodSugar": "90", "SystolicBP": "120",
-                            "DiastolicBP": "80"},   # below every cut-off
+        clear = {"kidney": {"egfr": "80", "uacr": "10", "systolic_bp": "120", "diastolic_bp": "80"},   # below every cut-off
                  "diabetes": {"HbA1c_level": "5.5", "blood_glucose_level": "140"}}
         one = " failed the input check above and may be an entry error. Check it against the source record before acting on it."
         for disease, changes, note in [
-                ("kidney", {"SystolicBP": "210", "DiastolicBP": "125"}, "Blood pressure (210/125 mmHg)" + one),
-                ("kidney", {"ACR": "500", "FastingBloodSugar": "260"},
-                 "Urine ACR (500 mg/g) and Fasting blood sugar (260 mg/dL) failed the input check above and may be entry "
-                 "errors. Check them against the source record before acting on them."),
-                ("kidney", {"ACR": "500", "HbA1c": "7"}, "Urine ACR (500 mg/g)" + one),   # the checked HbA1c is not named
+                ("kidney", {"systolic_bp": "210", "diastolic_bp": "125"}, "Blood pressure (210/125 mmHg)" + one),
+                ("kidney", {"egfr": "0.5", "uacr": "6000"},
+                 "eGFR (0.5) and Urine ACR (6000 mg/g) failed the input check above and may be entry errors. Check them "
+                 "against the source record before acting on them."),
+                ("kidney", {"uacr": "6000", "egfr": "45"}, "Urine ACR (6000 mg/g)" + one),   # the checked eGFR is not named
                 ("diabetes", {"HbA1c_level": "11.5"}, "HbA1c (11.5%)" + one),
-                ("kidney", {"ACR": "abc"}, None), ("diabetes", {"bmi": "", "blood_glucose_level": "lots"}, None)]:
+                ("kidney", {"uacr": "abc"}, None), ("diabetes", {"bmi": "", "blood_glucose_level": "lots"}, None)]:
             with self.subTest(disease=disease, changes=changes):
                 frame = pd.DataFrame([typical_row(disease, **{**clear[disease], **changes})]).astype(str)
-                row = prepare_upload(frame, disease, features(disease), feature_summary(disease), ["PatientID"])[0]
+                row = prepare_upload(frame, disease, form_fields(disease), feature_summary(disease), ["PatientID"])[0]
                 self.assertTrue(row["issues"])
                 record = {"status": "Incomplete", "issues_json": json.dumps(row["issues"]),
                           "values_json": json.dumps(row["values"]), "score": None, "threshold": None}

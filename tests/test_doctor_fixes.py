@@ -311,7 +311,7 @@ class PatientIntelligenceTests(DoctorFixture):
         self.assertEqual([d.date() for d in self.frame(at,'Condition')['Date']],[today,today,week])
         self.assertEqual([d.strftime('%Y-%m-%d %H:%M') for d in self.frame(at,'ID')['Date']],[f'{today} 01:45',f'{today} 01:30',f'{week} 02:00'])
         self.assertEqual(next(s for s in at.selectbox if s.label=='Open historical assessment').options[0],f'{readable(today)}, 01:45 · Diabetes · ID {ids[2]}')
-        self.assertTrue(any(f'**Diabetes**: Gradient boosting score 40.0% (not flagged) on {readable(today)}, 01:45;' in m.value for m in at.markdown))
+        self.assertTrue(any(f'**Diabetes**: Gradient boosting score 40.0% (not flagged; track: Not flagged) on {readable(today)}, 01:45;' in m.value for m in at.markdown))
 
     def test_doctor_views_use_readable_names(self):
         self.screening('kidney','RandomForest',.2,f'{local_today()-timedelta(days=1)} 09:00');self.screening('diabetes','GradientBoosting',.4)

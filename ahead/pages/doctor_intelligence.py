@@ -10,11 +10,12 @@ import streamlit as st
 
 from ahead import prevention as pv
 from ahead.components import TRACK_CLASS,markdown_literal,page_header,section_heading,track_pill_html
-from ahead.config import DISEASES,GENDER_CODED_FIELDS,OPTIONAL_INPUTS,model_label,pretty_label
+from ahead.clinical_data import OPTIONAL_BLANK
+from ahead.config import DISEASES,GENDER_CODED_FIELDS,OPTIONAL_INPUTS,YES_NO_FIELDS,model_label,pretty_label
 from ahead.platform_data import (activity_counts,ai_consent,analytics,approve_prevention_plan,clock_time,linked_patients,lifestyle_history,
     patient_screenings,plan_status,plans,prevention_plan_status,prevention_plans,prevention_progress,save_plan,save_prevention_draft,
     scheduled_doses,local_today,to_local,update_prevention_plan)
-from ahead.resources import gemini_available,chat_reply,icon_uri
+from ahead.resources import gemini_available,chat_reply,icon_uri,same_series
 from ahead.triage import LABELS,entered_later,missing_tests,open_urgent,track_text,triage_saved
 from ahead.visuals import summary_tile
 from ahead.theme import style_figure,show_chart
@@ -39,9 +40,9 @@ PLAN_STATUS={'active':('Active','#2E9477'),'paused':('Paused','#B7821E'),'stoppe
 # The prevention strip's icon per track, as on the patient's own track panel.
 STRIP_ICON={'urgent':'flagged','at_risk':'scored','not_flagged':'review','no_score':'screenings'}
 NOTE_EXAMPLE='Small steps count: a 30-minute walk on most days is a great start.'
-# The other 0/1-coded model inputs (GENDER_CODED_FIELDS read Male/Female); the screening form shows them as No/Yes.
-YES_NO={'hypertension','heart_disease','Smoking','FamilyHistoryKidneyDisease','FamilyHistoryHypertension','FamilyHistoryDiabetes','Edema'}
-BLANK='Not provided (the model used a typical value)'
+# The other 0/1-coded answers (GENDER_CODED_FIELDS read Male/Female); the screening form shows them as No/Yes.
+YES_NO=YES_NO_FIELDS
+BLANK=OPTIONAL_BLANK   # an optional lab is not a model input, so a blank one is simply not provided
 LOCAL_TIME={'Date':st.column_config.DatetimeColumn(format='D MMM YYYY, HH:mm')}
 
 
@@ -81,6 +82,7 @@ def _track_words(result):
     model did not flag the result."""
     reasons=[r['doctor'] for r in result['reasons']]
     if reasons and result['flagged'] is False:reasons[0]=f'The model did not flag this result, but {reasons[0][:1].lower()}{reasons[0][1:]}'
+    if result.get('lab'):reasons.append(result['lab']['doctor'])   # a measured lab value set the track, not the model
     return ' '.join([f"Track: {track_text(result,'doctor')['label']}.",*reasons])
 
 
@@ -205,8 +207,8 @@ def _disease(doctor_id):
     st.caption('The models output flagged/not flagged at their threshold, not Low/Medium/High categories. Track also applies '
                f"the urgent cut-offs: a result is {LABELS['urgent']['doctor'][0]} when an entered value is already in a range used when diagnosing a "
                'condition, whatever the score.'
-               +(' For diabetes, some models use a lower threshold when HbA1c or blood glucose was left blank; '
-                 'the Threshold (%) column shows the value applied.' if disease=='diabetes' else ''))
+               +(' Older diabetes records may show the lower threshold that applied when they were saved; the '
+                 'Threshold (%) column shows the value applied.' if disease=='diabetes' else ''))
 
 
 def _records(doctor_id):
@@ -228,7 +230,7 @@ def _records(doctor_id):
             title='Assessment history · separate condition / model series',color_discrete_sequence=CHART).update_xaxes(tickformatstops=[
             dict(dtickrange=[None,86400000],value='%-d %b, %H:%M'),dict(dtickrange=[86400000,None],value='%-d %b')],hoverformat='%-d %b %Y, %H:%M',title=None),legend=True))
         else:st.caption(f"All {len(rows)} assessments were saved at {_when(rows[0]['created_at'])}; the history chart appears once they span more than one minute.")
-        latest=rows[0];earlier=next((r for r in rows[1:] if r['disease']==latest['disease'] and r['model']==latest['model']),None)
+        latest=rows[0];earlier=next((r for r in rows[1:] if same_series(r,latest)),None)   # never a retired model's score
         series=f"{_label(latest['disease'])} · {model_label(latest['model'])}"
         if earlier:
             # inverse: a higher risk score is a worse change, so it shows red; an unchanged score gets no colour or arrow.
@@ -605,7 +607,9 @@ def _prevention(doctor_id):
                                   if not approved else 'Goals you agreed from standard advice. Kept targets keep their starting values; the model does not choose these.')
         stored={t['key']:t for t in plan['targets']} if plan and plan['disease']==disease else {}
         prefix=f'prevention_{patient_id}_{selected}_{disease}_{status}'
-        chosen=_targets_table(prefix,disease,_target_rows(disease,values,life,stored,approved),ro)
+        target_rows=_target_rows(disease,values,life,stored,approved)
+        chosen=_targets_table(prefix,disease,target_rows,ro)
+        blocked=not any(r['offered'] for r in target_rows)   # under 18, or a past heart event: nothing can be approved
         c1,c2=st.columns(2)
         with c1,st.container(border=True):when=_recheck(prefix,plan,ro)
         with c2,st.container(border=True):
@@ -615,9 +619,9 @@ def _prevention(doctor_id):
         targets=[{'key':t['key'],**({} if pv.TARGETS[t['key']].kind=='check' else {'goal':t['goal']})} for t in chosen]
         if status in ('new','draft'):
             with st.container(horizontal=True,vertical_alignment='center'):
-                send=st.button(f'Approve and send to {name}',type='primary',icon=':material/send:',key=f'prevention_approve_{patient_id}')
-                keep=st.button('Save draft',key=f'prevention_draft_{patient_id}')
-                st.caption(f'{name} is notified; you can pause or stop the plan later.'
+                send=st.button(f'Approve and send to {name}',type='primary',icon=':material/send:',key=f'prevention_approve_{patient_id}',disabled=blocked)
+                keep=st.button('Save draft',key=f'prevention_draft_{patient_id}',disabled=blocked)
+                st.caption('No AHEAD plan is offered for this patient.' if blocked else f'{name} is notified; you can pause or stop the plan later.'
                            +(' Approving replaces the current plan, which stays in the history.' if current else ''))
             if send or keep:
                 data={'disease':disease,'screening_id':latest['id'] if latest else None,'targets':targets,'note':note,'recheck_date':when}
@@ -645,8 +649,9 @@ def _prevention(doctor_id):
 
 
 def _same_model(rows):
-    """Per condition, newest first: its latest assessment and the previous one from the same model (or None)."""
-    return [(mine[0],next((r for r in mine[1:] if r['model']==mine[0]['model']),None))
+    """Per condition, newest first: its latest assessment and the previous one from the same model (or None); a retired
+    model's score of the same name is not the same model (same_series)."""
+    return [(mine[0],next((r for r in mine[1:] if same_series(r,mine[0])),None))
             for mine in ([r for r in rows if r['disease']==d] for d in dict.fromkeys(r['disease'] for r in rows))]
 
 
@@ -675,7 +680,7 @@ def _insights(doctor_id):
     rows=patient_screenings(doctor_id,patient['id']);existing=plans(patient['id'],doctor_id);past=_past_doses(patient['id'],doctor_id)
     life=lifestyle_history(patient['id']);pairs=_same_model(rows)
     section_heading('Pre-consultation record summary','Assembled from this patient’s saved records; no generative AI or diagnosis is involved.')
-    lines=[f"**{_label(new['disease'])}**: {model_label(new['model'])} score {new['score']:.1%} ({_result(new).lower()}) on {_when(new['created_at'])}; "
+    lines=[f"**{_label(new['disease'])}**: {model_label(new['model'])} score {new['score']:.1%} ({_result(new).lower()}; track: {_track_label(new)}) on {_when(new['created_at'])}; "
            +(f"{_change(new,old)} since assessment #{old['id']} on {_when(old['created_at'])}." if old else 'no earlier result from the same model to compare.')
            for new,old in pairs] or ['**Assessments**: no saved disease assessments.']
     lines.append(f'**Medication**: {_doses_text(existing,past)}')

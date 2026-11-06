@@ -22,8 +22,11 @@ clinician to confirm, not guideline citations:
              doctor checks it at the re-check.
   under 18   no target is offered: they are written for adults (an adult BMI cut-off, a weight-loss goal, adult
              activity and sleep guidance), so a child's plan is agreed outside AHEAD. The age is the condition's own
-             answer (diabetes age, kidney Age; heart's age categories all start at 18), else the latest tracker log's
-             age; the cut-off is ahead/triage.py's age rule.
+             answer (diabetes and kidney age; heart's age categories all start at 18), else the latest tracker log's
+             age; the cut-off is ahead/triage.py's age rule. Older saved kidney screenings are read under the current
+             names (triage.prepared_values).
+  heart      no target is offered when the heart screening reports a past heart attack, angina or stroke
+  history    (triage.HISTORY_GATES, the urgent track): that is secondary prevention, agreed outside AHEAD.
 
 Goal bounds match the tracker's Goals form, so a goal the plan writes there always fits the form. Every target is
 logged in the lifestyle tracker (fruit and vegetables as servings in a check-in; the food analyzer's meals hold no
@@ -50,7 +53,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from ahead.triage import ADULTS_ONLY, RULES, entered, number_text
+from ahead.triage import ADULTS_ONLY, HISTORY, RULES, entered, number_text, prepared_values, reported_history
 
 ZONE = ZoneInfo("Asia/Dubai")   # the same local zone as ahead/platform_data.py (which imports this module)
 WINDOW_DAYS = 7
@@ -148,14 +151,22 @@ STARTING_POINTS = {
 # urgent line ("a value is ... in a diagnostic range") may not hold.
 FIT = {
     "at_risk": "Flagged by the model; no entered value is in a diagnostic range, so a prevention plan fits.",
+    "at_risk_lab": "HbA1c is in the prediabetes range and no entered value is in a diagnostic range, so a prevention "
+                   "plan fits.",
+    "not_flagged_lab": "The entered lab values are in the usual range. A plan is optional; standard advice still "
+                       "applies.",
     "urgent": "A value is already in a diagnostic range, so a visit comes first. A plan can still go alongside it.",
     "not_flagged": "Not flagged by the model. A plan is optional; standard advice still applies.",
     "no_score": "There is no model score for this result. A plan is optional; standard advice still applies.",
     "child": "The patient is under 18, and AHEAD's targets are written for adults, so agree any plan outside AHEAD.",
     "urgent_child": "This result needs a visit first. The patient is under 18, and AHEAD's targets are written for "
                     "adults, so agree any plan outside AHEAD.",
+    "urgent_history": "The patient reports a past heart attack, angina or stroke. AHEAD's targets are written for "
+                      "people without established cardiovascular disease, so no plan is offered here; agree secondary "
+                      "prevention outside AHEAD.",
 }
 CHILD_REASON = "Not offered: under 18; these targets are written for adults"
+HISTORY_REASON = "Not offered: past heart attack, angina or stroke reported"
 
 STATUS_TEXT = {"draft": "Draft", "active": "Active", "paused": "Paused", "stopped": "Stopped"}
 PROGRESS_TEXT = {"on_track": "On track", "behind": "Behind", "not_logged": "Not logged yet",
@@ -185,13 +196,16 @@ def fit_text(result, child: bool = False) -> str:
     Why a plan fits a result, for the doctor: result is a triage() result or a bare track name. child: the patient is
     under 18 (child_age() is not None); a triage result's own 'child' (an age under 18 on the screening) counts too.
     """
+    lab = False
     if isinstance(result, dict):
-        track, child = result.get("track"), child or bool(result.get("child"))
+        if any(reason.get("kind") == HISTORY for reason in result.get("reasons") or ()):
+            return FIT["urgent_history"]
+        track, child, lab = result.get("track"), child or bool(result.get("child")), bool(result.get("lab"))
     else:
         track = result
     if child:
         return FIT["urgent_child" if track == "urgent" else "child"]
-    return FIT.get(track, FIT["no_score"])
+    return FIT.get(f"{track}_lab" if lab else track, FIT["no_score"])
 
 
 # =============================================================================
@@ -230,15 +244,15 @@ def body_mass_index(disease: str, values: dict, logs=()) -> tuple:
     weight, height = _number(log, "weight_kg", True), _number(log, "height_cm", True)
     if weight and height:
         return round(weight / (height / 100) ** 2, 1), "tracker"
-    bmi = _number(values or {}, "bmi" if disease == "diabetes" else "BMI", True)
+    bmi = _number(prepared_values(disease, values or {}), "BMI" if disease == "heart" else "bmi", True)
     return (round(bmi, 1), "screening") if bmi else (None, None)
 
 
 def smoking_status(disease: str, values: dict):
     """'current', 'former', 'ever', 'never', 'non_smoker' or None (not recorded), from the condition's own answer:
-    diabetes smoking_history, heart SmokerStatus, kidney Smoking (1 = smokes)."""
+    diabetes and kidney smoking_history, heart SmokerStatus, an older kidney screening's Smoking (1 = smokes)."""
     values = values or {}
-    if disease == "diabetes":
+    if disease == "diabetes" or (disease == "kidney" and "smoking_history" in values):
         return _DIABETES_SMOKING.get(str(values.get("smoking_history", "")).strip().lower())
     if disease == "heart":
         answer = str(values.get("SmokerStatus", "")).strip().lower()
@@ -253,9 +267,9 @@ def smoking_status(disease: str, values: dict):
 
 def child_age(disease: str, values: dict, logs=()):
     """The patient's age when it is under 18 (ADULT_AGE), else None: the condition's own age answer (triage's age rule:
-    diabetes age, kidney Age; heart's age categories all start at 18), or the latest tracker log's age when the
+    diabetes and kidney age; heart's age categories all start at 18), or the latest tracker log's age when the
     screening has none."""
-    values = values or {}
+    values = prepared_values(disease, values or {}) if disease in RULES else values or {}
     rule = next((rule for rule in RULES.get(disease, ()) if rule.kind == ADULTS_ONLY), None)
     if disease == "heart" and str(values.get("AgeCategory") or "").strip():
         return None
@@ -266,13 +280,15 @@ def child_age(disease: str, values: dict, logs=()):
 
 
 def facts(disease: str, values: dict, logs=()) -> list:
-    """Short facts for the doctor's strip: ['BMI 31.2', 'former smoker'], with 'age 12 (under 18)' first for a child;
-    a missing one is left out."""
+    """Short facts for the doctor's strip: ['BMI 31.2', 'former smoker', 'not active'], with 'age 12 (under 18)' first
+    for a child; a missing one is left out. Activity comes from the kidney form's physically_active answer."""
     bmi, _ = body_mass_index(disease, values, logs)
     smoker = smoking_status(disease, values)
     age = child_age(disease, values, logs)
+    active = entered((values or {}).get("physically_active")) if disease == "kidney" else None
     return [*([f"age {number_text(age)} (under {ADULT_AGE:g})"] if age is not None else []),
-            *([f"BMI {bmi:.1f}"] if bmi else []), *([SMOKING_TEXT[smoker].lower()] if smoker else [])]
+            *([f"BMI {bmi:.1f}"] if bmi else []), *([SMOKING_TEXT[smoker].lower()] if smoker else []),
+            *({1: ["active"], 0: ["not active"]}.get(active, []))]
 
 
 # =============================================================================
@@ -388,9 +404,10 @@ def template(disease: str, latest_values: dict | None = None, lifestyle_logs=())
     platform_data.lifestyle_history, or bare values dicts). Each target:
       key, label, measure, unit, kind, icon, color, min, max, step
       offered      the catalog allows it for this patient (weight: BMI >= 25; smoking: a current smoker; nothing
-                   under 18)
+                   under 18, nor on a heart screening that reports a past heart attack, angina or stroke)
       enabled      ticked by default: offered and a default goal is available
-      reason       why it is not offered or not ticked ('' otherwise): 'Not needed: former smoker', CHILD_REASON
+      reason       why it is not offered or not ticked ('' otherwise): 'Not needed: former smoker', CHILD_REASON,
+                   HISTORY_REASON
       baseline     from the latest tracker log (smoking: the screening's status), or None
       baseline_text, goal (a number, [low, high] for sleep, None for smoking or a weight with nothing logged),
       goal_text, why
@@ -401,6 +418,7 @@ def template(disease: str, latest_values: dict | None = None, lifestyle_logs=())
     bmi, source = body_mass_index(disease, values, logs)
     smoker = smoking_status(disease, values)
     child = child_age(disease, values, logs) is not None
+    history = bool(reported_history(disease, values))   # the urgent track's past events: no AHEAD plan fits them
     rows = []
     for key in point.targets:
         target = TARGETS[key]
@@ -429,6 +447,8 @@ def template(disease: str, latest_values: dict | None = None, lifestyle_logs=())
         if child:
             offered, reason = False, CHILD_REASON
             goal = None if key == "weight" else goal   # no weight-loss number for a child, even greyed out
+        elif history:
+            offered, reason = False, HISTORY_REASON
         rows.append({
             "key": key, "label": target.label, "measure": target.measure, "unit": target.unit, "kind": target.kind,
             "icon": target.icon, "color": target.color, "min": target.bounds[0] if target.bounds else None,

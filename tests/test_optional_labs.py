@@ -1,9 +1,11 @@
-"""Optional lab inputs: blank values must not crash factor rules and must reach the model as missing."""
+"""Optional lab inputs: blank values must not crash factor rules, never reach the diabetes or kidney model (they are
+not model inputs since the switch to NHANES), and the note above a result says so instead of claiming the model
+filled them in. The old per-blank thresholds (scripts/missing_inputs.py profiles) were removed with them."""
 import math
 import unittest
 
-from ahead.config import OPTIONAL_INPUTS, REQUIRED_FOR_SCORE
-from ahead.resources import _missing_inputs, best_model, decision_threshold, missing_inputs_profile
+from ahead.config import OPTIONAL_INPUTS
+from ahead.resources import _missing_inputs, missing_inputs_profile
 from ahead.screening import _model_frame, identify_risk_factors, missing_note
 
 
@@ -12,49 +14,51 @@ class OptionalLabTests(unittest.TestCase):
         diabetes = {'bmi': 31, 'hypertension': 0, 'heart_disease': 0, 'smoking_history': 'never',
                     'HbA1c_level': None, 'blood_glucose_level': None}
         self.assertEqual(identify_risk_factors('diabetes', diabetes), ['Higher BMI'])
-        kidney = {'Smoking': 0, 'BMI': 24, 'FamilyHistoryKidneyDisease': 0, 'FamilyHistoryHypertension': 0,
-                  'FamilyHistoryDiabetes': 0, 'Edema': 0, 'SystolicBP': None, 'DiastolicBP': 85,
-                  'GFR': None, 'ACR': 40}
+        kidney = {'age': 45, 'gender': 'Male', 'bmi': 24, 'smoking_history': 'never', 'physically_active': 1,
+                  'hypertension': 0, 'diabetes': 0, 'heart_disease': 0, 'family_kidney': None,
+                  'systolic_bp': None, 'diastolic_bp': 85, 'creatinine': None, 'egfr': None, 'uacr': 40}
         self.assertEqual(identify_risk_factors('kidney', kidney),
                          ['Higher entered blood pressure', 'Higher entered urine ACR'])
+        # An older saved kidney screening's keys still give its factors.
+        legacy = {'Smoking': 1, 'BMI': 31, 'FamilyHistoryKidneyDisease': 1, 'FamilyHistoryHypertension': 0,
+                  'FamilyHistoryDiabetes': 0, 'Edema': 0, 'SystolicBP': None, 'DiastolicBP': 85, 'GFR': None, 'ACR': 40}
+        self.assertEqual(identify_risk_factors('kidney', legacy),
+                         ['Smoking history', 'Higher BMI', 'Family history of kidney disease',
+                          'Higher entered blood pressure', 'Higher entered urine ACR'])
 
     def test_blank_values_become_nan_for_the_model(self):
-        frame = _model_frame({'HbA1c_level': None, 'bmi': 27.5})
-        self.assertTrue(math.isnan(frame.loc[0, 'HbA1c_level']))
-        self.assertEqual(frame.loc[0, 'bmi'], 27.5)
+        frame = _model_frame({'bmi': None, 'age': 52})
+        self.assertTrue(math.isnan(frame.loc[0, 'bmi']))
+        self.assertEqual(frame.loc[0, 'age'], 52)
 
-    def test_profile_lookup_ignores_order(self):
-        a = missing_inputs_profile('diabetes', 'GradientBoosting', ['HbA1c_level', 'blood_glucose_level'])
-        b = missing_inputs_profile('diabetes', 'GradientBoosting', ['blood_glucose_level', 'HbA1c_level'])
-        self.assertIsNotNone(a)
-        self.assertEqual(a, b)
-        self.assertLess(a['threshold'], 0.5)
-        self.assertIsNotNone(missing_inputs_profile('kidney', 'XGBoost', ['DiastolicBP', 'SystolicBP']))
-        self.assertIsNone(missing_inputs_profile('kidney', 'XGBoost', ['GFR']))
+    def test_no_condition_has_blank_input_profiles_any_more(self):
+        # Optional values are labs, which no model reads, so there is nothing to measure with them blank.
+        for disease in OPTIONAL_INPUTS:
+            self.assertEqual(_missing_inputs()[disease]['models'], {}, disease)
+            self.assertIsNone(missing_inputs_profile(disease, 'LogisticRegression', OPTIONAL_INPUTS[disease]))
 
-    def test_every_allowed_pattern_is_measured_and_never_raises_the_threshold(self):
-        for disease, data in _missing_inputs().items():
-            if disease == 'method':
-                continue
-            optional = [f for f in OPTIONAL_INPUTS[disease] if f not in REQUIRED_FOR_SCORE.get(disease, [])]
-            for model, entries in data['models'].items():
-                self.assertEqual(len(entries), 2 ** len(optional), (disease, model))
-                usual = decision_threshold(disease, model)
-                for key, entry in entries.items():
-                    self.assertLessEqual(entry['threshold'], usual, (disease, model, key))
-
-    def test_note_only_claims_compensation_when_the_threshold_drops(self):
-        kidney_model = best_model('kidney')
-        result = {'model': kidney_model, 'missing': ['SystolicBP', 'DiastolicBP'],
-                  'threshold': decision_threshold('kidney', kidney_model),
-                  'profile': missing_inputs_profile('kidney', kidney_model, ['SystolicBP', 'DiastolicBP'])}
-        note = missing_note('kidney', result)
-        self.assertNotIn('make up', note)
-        self.assertIn('with every value entered', note)
-        diabetes = {'model': 'GradientBoosting', 'missing': ['HbA1c_level'],
-                    'profile': missing_inputs_profile('diabetes', 'GradientBoosting', ['HbA1c_level'])}
-        diabetes['threshold'] = diabetes['profile']['threshold']
-        self.assertIn('make up', missing_note('diabetes', diabetes))
+    def test_note_says_labs_are_not_model_inputs(self):
+        diabetes = {'values': {'age': 50, 'HbA1c_level': None, 'blood_glucose_level': None}}
+        note = missing_note('diabetes', diabetes)
+        self.assertTrue(note.startswith('You left HbA1c and blood glucose blank.'), note)
+        self.assertIn("The model doesn't use test results", note)
+        self.assertIn('An HbA1c test', note)
+        self.assertNotIn('typical', note)
+        doctor = missing_note('diabetes', diabetes, doctor=True)
+        self.assertTrue(doctor.startswith('HbA1c and blood glucose were left blank.'), doctor)
+        self.assertNotRegex(doctor, r'\b[Yy]ou(r)?\b')
+        kidney = {'values': {'age': 50, 'gender': 'Female', 'creatinine': None, 'egfr': None, 'uacr': None,
+                             'systolic_bp': None, 'diastolic_bp': None}}
+        note = missing_note('kidney', kidney)
+        self.assertTrue(note.startswith('You left creatinine and eGFR, and urine ACR blank.'), note)
+        self.assertIn('You left blood pressure blank, so AHEAD could not check it.', note)
+        # Labs entered: only the blood pressure line; everything entered, or a child: no note.
+        entered = {**kidney['values'], 'egfr': 80, 'uacr': 10}
+        self.assertEqual(missing_note('kidney', {'values': entered}),
+                         'You left blood pressure blank, so AHEAD could not check it. A home or pharmacy reading is a '
+                         'simple start.')
+        self.assertEqual(missing_note('kidney', {'values': {**entered, 'systolic_bp': 120, 'diastolic_bp': 80}}), '')
+        self.assertEqual(missing_note('diabetes', {'values': {'age': 12, 'HbA1c_level': None}}), '')
 
 
 if __name__ == '__main__':

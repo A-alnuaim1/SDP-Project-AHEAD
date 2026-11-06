@@ -434,6 +434,26 @@ class StoredPlanTests(unittest.TestCase):
             approve_prevention_plan(self.d, self.q, self.plan(disease='kidney', screening_id=None, targets=targets))
         self.assertEqual((prevention_plans(self.q, self.d), [n for n in notifications(self.q) if n['type'] == 'plan']), ([], []))
 
+    def test_no_plan_after_a_past_heart_attack_angina_or_stroke(self):
+        # The heart screening's urgent track for a past event: secondary prevention, agreed outside AHEAD.
+        from ahead.triage import triage
+        for answers in ({'HadHeartAttack': 'Yes'}, {'HadAngina': 'Yes'}, {'HadStroke': 'Yes'}):
+            values = {'BMI': 31, 'SmokerStatus': 'Current smoker - now smokes every day', 'HadHeartAttack': 'No',
+                      'HadAngina': 'No', 'HadStroke': 'No'} | answers
+            rows = pv.template('heart', values, [LOG])
+            self.assertEqual({(r['offered'], r['enabled'], r['reason']) for r in rows},
+                             {(False, False, pv.HISTORY_REASON)}, answers)
+            result = triage('heart', values, .02, .08)
+            self.assertEqual((result['track'], pv.fit_text(result)), ('urgent', pv.FIT['urgent_history']))
+        # Other conditions, and heart screenings without the answers (saved before the questions), are unchanged.
+        self.assertTrue(keyed(pv.template('heart', {'BMI': 31, 'HadStroke': 'No'}, [LOG]))['activity']['offered'])
+        self.assertTrue(keyed(pv.template('diabetes', {'bmi': 31, 'HadHeartAttack': 'Yes'}, [LOG]))['activity']['offered'])
+        heart = save_screening(self.p, 'heart', 'Model', .2, 1, .08, {'BMI': 31, 'HadAngina': 'Yes'})
+        with self.assertRaisesRegex(ValueError, r'Physical activity is not offered for this patient \(past heart '
+                                                r'attack, angina or stroke reported\)'):
+            approve_prevention_plan(self.d, self.p, self.plan(disease='heart', screening_id=heart,
+                                                              targets=[{'key': 'activity', 'goal': 150}]))
+
     def test_edits_check_offers_against_the_newest_screening(self):
         # Approved from a screening with smoking not recorded; the patient then re-screens as a current smoker.
         first = save_screening(self.p, 'diabetes', 'Model', .55, 1, .5, {'smoking_history': 'No Info', 'bmi': 31.2})
